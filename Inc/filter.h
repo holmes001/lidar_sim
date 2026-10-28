@@ -1,97 +1,132 @@
+/**
+ * @file    filter.h
+ * @brief   匹配滤波、FFT 与 range-Doppler 处理
+ */
 #ifndef FILTER_H
 #define FILTER_H
 
-#include <complex>
 #include <cstddef>
 #include <vector>
 
-using Complex    = std::complex<double>;
-using ComplexVec = std::vector<Complex>;
+#include "complex_types.h"
 
+/** @brief 匹配滤波输出模式 */
 enum class MatchFilterMode {
-    Full,   // 长度 N+M-1，完整卷积；峰值位置 = 匹配起点 + M-1
-    Same,   // 长度 N（与输入等长）；输出索引 t 即"信号从 t 开始匹配"的强度
-    Valid   // 长度 N-M+1（要求 N>=M）；无 zero-padding，完全重叠区
+    Full,   ///< 长度 N+M-1；峰值位置 = 匹配起点 + M-1
+    Same,   ///< 长度 N；输出索引 t 即"信号从 t 开始匹配"的强度
+    Valid   ///< 长度 N-M+1（要求 N>=M）；不补零，完全重叠区
 };
 
-// ---- 匹配滤波 ----
-//   signal  输入复信号
-//   ref     参考(模板)信号，通常取发射脉冲本身
-//   mode    输出长度/对齐方式
-//   normalizeByRefEnergy  为 true 时用 ref 总能量归一化（完全匹配时峰值 = 1）
+/**
+ * @brief 匹配滤波：y = signal ⊛ h，h[k] = conj(ref[M-1-k])
+ * @param signal                输入复信号
+ * @param ref                   参考模板，通常取发射波形
+ * @param mode                  输出长度与对齐方式
+ * @param normalizeByRefEnergy  为 true 时按 ref 总能量归一化，完全匹配时峰值为 1
+ * @return 滤波后的复信号；任一输入为空时返回空
+ * @note 直接时域卷积，复杂度 O(N·M)。
+ */
 ComplexVec matchedFilter(const ComplexVec& signal,
                          const ComplexVec& ref,
                          MatchFilterMode mode = MatchFilterMode::Same,
                          bool normalizeByRefEnergy = false);
 
-// ---- 信号功率测量 ----
-double      signalEnergy(const ComplexVec& x);                       // 总能量 Σ|x|^2
-double      peakPower(const ComplexVec& x);                          // 峰值功率 max|x|^2
-std::size_t peakPowerIndex(const ComplexVec& x);                     // 峰值位置
-double      powerToDB(double power, double ref = 1.0);               // 10*log10(P/ref)
-double      measureSignalPower(const ComplexVec& x,
-                               bool in_db = false,
-                               double ref = 1.0);                    // 平均功率
+/**
+ * @brief 复数 DFT
+ * @param x 输入序列，长度任意（不要求 2 的幂）
+ * @return 频谱，长度与输入相同，不归一化
+ */
+ComplexVec fft(const ComplexVec& x);
 
-// -----------------------------------------------------------------
-// 离散 PI 控制器（位置式）
-//   u[k] = kp * e[k] + Σ_i (ki * e[i])
-// e 为归一化误差(无量纲)，u 为归一化控制量(无量纲)，
-// 因此 kp、ki 与信号量纲无关，便于移植。
-// -----------------------------------------------------------------
-struct PIController {
-    double kp       = 1.0;      // 比例增益
-    double ki       = 0.2;      // 积分增益(每步累积量)
-    double out_min  = -0.99;    // 控制量下限，保证 1+u > 0
-    double out_max  = 1.0e3;    // 控制量上限
-    double integ_gate = 1.0;    // 积分分离阈值：|e| > 它时只走比例
-                                // (防止远距离目标把积分冲爆而发散)
-    double integral = 0.0;      // 积分累积项
+/**
+ * @brief 复数 IDFT
+ * @param x 频谱
+ * @return 时域序列，已含 1/N 归一化
+ */
+ComplexVec ifft(const ComplexVec& x);
 
-    // 单步更新：输入归一化误差，返回限幅后的控制量
-    double update(double error);
-    void   reset() { integral = 0.0; }
+/**
+ * @brief 频谱搬移，把零频从索引 0 移到中心
+ * @param x 输入序列
+ * @return 搬移后的序列，y[i] = x[(i + N/2) % N]
+ * @note 配合 fft 使用后，索引 N/2 对应 0 Hz，索引递增对应频率递增。
+ */
+ComplexVec fftShift(const ComplexVec& x);
+
+/**
+ * @brief range-Doppler 图的峰值
+ *
+ * @note 距离取整数列号（时延本身就是整数样点）；多普勒用三点抛物线插值细化，
+ *       因此 doppler_hz 不落在频率栅格上。
+ */
+struct RangeDopplerPeak {
+    std::size_t doppler_index = 0;   ///< 多普勒行号（已 fftShift，中心行 = 0 Hz）
+    std::size_t range_index   = 0;   ///< 距离列号
+    double      doppler_hz    = 0.0; ///< 多普勒频率 [Hz]，正 = 接近
+    double      velocity      = 0.0; ///< 径向速度 [m/s]，正 = 接近
+    double      range_m       = 0.0; ///< 距离 [m]
+    double      power         = 0.0; ///< |RD|²
 };
 
-// 功率闭环放大的迭代报告
-struct PowerLoopReport {
-    ComplexVec output;          // 闭环输出信号 y = g * x
-    double     gain       = 1.0;// 最终(总)增益
-    double     power      = 0.0;// 输出实际功率
-    double     abs_error  = 0.0;// 绝对误差 = 理想功率 - 实际功率
-    double     rel_error  = 0.0;// 相对误差 = |abs_error| / 理想功率
-    int        iterations = 0;  // 实际迭代次数
-    bool       converged  = false; // 是否满足收敛阈值
-};
+/**
+ * @brief 逐脉冲匹配滤波，得到慢时间矩阵
+ * @param pulses 各脉冲的回波，pulses[p] 为第 p 个脉冲的快时间记录
+ * @param ref    匹配滤波参考模板
+ * @param mode   匹配滤波输出模式
+ * @return 慢时间矩阵 slow[p][r]，行 = 脉冲序号（慢时间），列 = 距离门
+ * @note 各行长度取 pulses[p] 经 matchedFilter 后的实际长度，原则上应一致。
+ */
+ComplexVec2D matchedFilterFrame(const ComplexVec2D& pulses,
+                                const ComplexVec& ref,
+                                MatchFilterMode mode = MatchFilterMode::Same);
 
-// 功率感知方式
-enum class PowerSenseMode {
-    Analytic,   // 解析：y = g*x => P = g^2 * P_in，每轮 O(1)，不重建信号
-    Measured    // 实测：每轮重建 y 并遍历求功率，O(N)；
-                // 频域响应/饱和/非线性模型必须用这个
-};
+/**
+ * @brief range-Doppler 处理：沿慢时间做 FFT
+ * @param slow_time matchedFilterFrame 的输出 slow[p][r]
+ * @return range-Doppler 图 rd[k][r]，行 = 多普勒门（已 fftShift，中心行 = 0 Hz），
+ *         列 = 距离门，内容为复数值
+ * @note 每个距离门独立做 N 点 FFT，一次批量规划；内存 O(N·R)。
+ */
+ComplexVec2D rangeDopplerMap(const ComplexVec2D& slow_time);
 
-// 功率闭环放大器的全部可调参数（都有默认值，按需覆盖即可）
-struct PowerLoopConfig {
-    double         kp           = 1.0;    // PI 比例增益
-    double         ki           = 0.2;    // PI 积分增益
-    double         integ_gate   = 1.0;    // 积分分离阈值：|e_rel| 超过它时只走比例
-    double         tol_rel      = 1.0e-3; // 收敛阈值：相对误差 |err|/target 小于它即停
-    int            max_iter     = 100;    // 最大迭代次数
-    double         initial_gain = 1.0;    // 初始增益 g0
-    double         max_gain     = 1.0e6;  // 增益上限（防止发散）
-    PowerSenseMode sense        = PowerSenseMode::Analytic; // 功率感知方式
-    std::vector<double>* history = nullptr; // 非空时记录每次迭代的功率(可画收敛曲线)
-};
+/**
+ * @brief 距离轴：R = r · c · dt / 2
+ * @param n_range 距离门数
+ * @param dt      快时间采样间隔 [s]
+ * @return 长度为 n_range 的距离序列 [m]
+ */
+std::vector<double> rangeAxis(std::size_t n_range, double dt);
 
-// 功率闭环放大器：默认参数版本
-PowerLoopReport amplifyToTargetPower(const ComplexVec& input, double target_power);
+/**
+ * @brief 多普勒轴（与 fftShift 后的行号对应）
+ * @param n_pulse 脉冲数
+ * @param pri     脉冲重复间隔 [s]
+ * @return 长度为 n_pulse 的多普勒序列 [Hz]，中心行为 0
+ * @note 分辨率 1/(N·PRI)，无模糊范围 ±1/(2·PRI)。
+ */
+std::vector<double> dopplerAxis(std::size_t n_pulse, double pri);
 
-// 功率闭环放大器：自定义参数版本
-//   输入复信号 + 理想功率，迭代调节增益 g 使输出平均功率趋于理想功率。
-//   sense 标量增益模型用 Analytic(默认)，非理想放大器用 Measured
-PowerLoopReport amplifyToTargetPower(const ComplexVec& input,
-                                     double target_power,
-                                     const PowerLoopConfig& cfg);
+/**
+ * @brief 速度轴：v = f_d · λ / 2
+ * @param n_pulse    脉冲数
+ * @param pri        脉冲重复间隔 [s]
+ * @param wavelength 中心波长 [m]
+ * @return 长度为 n_pulse 的径向速度序列 [m/s]
+ */
+std::vector<double> velocityAxis(std::size_t n_pulse, double pri, double wavelength);
+
+/**
+ * @brief 在 range-Doppler 图中搜索峰值并换算物理量
+ * @param rd         rangeDopplerMap 的输出
+ * @param pri        脉冲重复间隔 [s]
+ * @param dt         快时间采样间隔 [s]
+ * @param wavelength 中心波长 [m]
+ * @return 峰值信息；rd 为空时返回全零
+ * @note 多普勒用三点抛物线插值细化，峰值贴边时退化为整数行号。
+ */
+RangeDopplerPeak findRangeDopplerPeak(const ComplexVec2D& rd,
+                                      double pri,
+                                      double dt,
+                                      double wavelength);
 
 #endif

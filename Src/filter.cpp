@@ -1,30 +1,25 @@
+/**
+ * @file    filter.cpp
+ * @brief   匹配滤波、FFT 与 range-Doppler 处理实现
+ */
 #include "filter.h"
 
-#include <vector>
-#include <complex>
 #include <algorithm>
-#include <cstddef>
 #include <cmath>
-#include <limits>
-#include <iostream>
-#include <iomanip>
+#include <cstddef>
 
-using Complex    = std::complex<double>;
-using ComplexVec = std::vector<Complex>;
+#include <fftw3.h>
 
-// 输出模式
+#include "transport.h"
 
-
-// -----------------------------------------------------------------
-// 匹配滤波器：y = signal ⊛ h,  h[k] = conj(ref[M-1-k])
-// 参数：
-//   signal                输入复信号
-//   ref                   参考(模板)复信号
-//   mode                  输出模式
-//   normalizeByRefEnergy  为 true 时用 ref 总能量归一化(峰值最大化为 1)
-// 返回：
-//   滤波后的复信号
-// -----------------------------------------------------------------
+/**
+ * @brief 匹配滤波：y = signal ⊛ h，h[k] = conj(ref[M-1-k])
+ * @param signal                输入复信号
+ * @param ref                   参考模板
+ * @param mode                  输出长度与对齐方式
+ * @param normalizeByRefEnergy  为 true 时按 ref 总能量归一化
+ * @return 滤波后的复信号；任一输入为空时返回空
+ */
 ComplexVec matchedFilter(const ComplexVec& signal,
                          const ComplexVec& ref,
                          MatchFilterMode mode,
@@ -34,19 +29,19 @@ ComplexVec matchedFilter(const ComplexVec& signal,
     const std::size_t M = ref.size();
     if (N == 0 || M == 0) return {};
 
-    // 直接时域卷积：y_full[n] = Σ_k signal[k] * conj(ref[M-1-(n-k)])
+    /// 直接时域卷积：y_full[n] = Σ_k signal[k]·conj(ref[M-1-(n-k)])
     ComplexVec full(N + M - 1, Complex(0.0, 0.0));
     for (std::size_t n = 0; n < N; ++n) {
         const Complex xn = signal[n];
-        if (xn == Complex(0.0, 0.0)) continue;          // 稀疏信号优化
+        if (xn == Complex(0.0, 0.0)) continue;          ///< 稀疏信号优化
         for (std::size_t k = 0; k < M; ++k)
             full[n + k] += xn * std::conj(ref[M - 1 - k]);
     }
 
-    // 可选：按参考信号能量归一化，使完全匹配时峰值 = 1
+    /// 可选归一化：按参考信号总能量缩放，完全匹配时峰值 = 1
     if (normalizeByRefEnergy) {
         double e = 0.0;
-        for (const auto& c : ref) e += std::norm(c);   // |c|^2
+        for (const auto& c : ref) e += std::norm(c);
         if (e > 0.0) {
             const double inv = 1.0 / e;
             for (auto& c : full) c *= inv;
@@ -58,20 +53,20 @@ ComplexVec matchedFilter(const ComplexVec& signal,
         return full;
 
     case MatchFilterMode::Same: {
-        // 取 full[M-1 : M-1+N]，索引 t 对应信号从 t 起与 ref 匹配
+        /// 取 full[M-1 : M-1+N]，索引 t 对应信号从 t 起与 ref 匹配
         ComplexVec out(N);
-        std::copy(full.begin() + static_cast<std::ptrdiff_t>(M - 1),
-                  full.begin() + static_cast<std::ptrdiff_t>(M - 1 + N),
+        std::copy(full.begin() + (M - 1),
+                  full.begin() + (M - 1 + N),
                   out.begin());
         return out;
     }
 
     case MatchFilterMode::Valid: {
-        if (N < M) return {};                          // 无完全重叠区
+        if (N < M) return {};                          ///< 无完全重叠区
         const std::size_t L = N - M + 1;
         ComplexVec out(L);
-        std::copy(full.begin() + static_cast<std::ptrdiff_t>(M - 1),
-                  full.begin() + static_cast<std::ptrdiff_t>(M - 1 + L),
+        std::copy(full.begin() + (M - 1),
+                  full.begin() + (M - 1 + L),
                   out.begin());
         return out;
     }
@@ -79,200 +74,197 @@ ComplexVec matchedFilter(const ComplexVec& signal,
     return {};
 }
 
-
-
-// -----------------------------------------------------------------
-// 信号功率测量
-// -----------------------------------------------------------------
-
-// 总能量：E = Σ |x[n]|^2
-double signalEnergy(const ComplexVec& x)
+/**
+ * @brief 单序列 FFT/IFFT 的公共实现
+ * @param x    输入序列
+ * @param sign FFTW_FORWARD 或 FFTW_BACKWARD
+ * @return 变换结果，长度与输入相同，不做归一化
+ * @note 每次调用都新建计划；批量场景请用 rangeDopplerMap 里的一次性规划。
+ */
+static ComplexVec fftwTransform(const ComplexVec& x, int sign)
 {
-    double e = 0.0;
-    for (const auto& c : x) e += std::norm(c);         // |c|^2
-    return e;
-}
+    ComplexVec out(x.size());
+    if (x.empty()) return out;
 
-// 峰值功率：P_peak = max |x[n]|^2
-double peakPower(const ComplexVec& x)
-{
-    double p = 0.0;
-    for (const auto& c : x) p = std::max(p, std::norm(c));
-    return p;
-}
+    const std::size_t n = x.size();
+    fftw_complex* in  = fftw_alloc_complex(n);
+    fftw_complex* res = fftw_alloc_complex(n);
+    if (!in || !res) { fftw_free(in); fftw_free(res); return out; }
 
-// 峰值功率对应的索引；空信号返回 0
-std::size_t peakPowerIndex(const ComplexVec& x)
-{
-    std::size_t idx = 0;
-    double best = -1.0;
-    for (std::size_t n = 0; n < x.size(); ++n) {
-        const double p = std::norm(x[n]);
-        if (p > best) { best = p; idx = n; }
-    }
-    return idx;
-}
-
-// 功率转 dB：10*log10(P / ref)，P<=0 时返回 -inf
-double powerToDB(double power, double ref)
-{
-    if (power <= 0.0 || ref <= 0.0)
-        return -std::numeric_limits<double>::infinity();
-    return 10.0 * std::log10(power / ref);
-}
-
-// -----------------------------------------------------------------
-// 测量信号功率
-// 参数：
-//   x      输入复信号（时域采样）
-//   in_db  为 true 时返回 dB 值（相对 1.0，即 dBW/dBFS）
-//   ref    归一化参考功率，默认 1.0
-// 返回：
-//   平均功率 P = (1/N) * Σ |x[n]|^2；空信号返回 0
-// 说明：
-//   平均功率 = 总能量 / 采样点数，适用于噪声、回波等整段信号；
-//   若只关心匹配滤波输出的峰值，请用 peakPower(x)。
-// -----------------------------------------------------------------
-double measureSignalPower(const ComplexVec& x,
-                          bool in_db,
-                          double ref)
-{
-    if (x.empty()) return 0.0;
-
-    const double p = signalEnergy(x) / static_cast<double>(x.size());
-    return in_db ? powerToDB(p, ref) : p;
-}
-
-// -----------------------------------------------------------------
-// 离散 PI 控制器（位置式 + 积分分离 + 抗饱和）
-//   u[k] = kp * e[k] + Σ_i (ki * e[i])
-// 抗积分饱和：
-//   1) 积分分离：|e| 大于 integ_gate 时不做积分，只用比例（大偏差快速拉回，
-//      避免乘法型被控对象在远距离目标上把积分冲爆导致发散）；
-//   2) 输出饱和且误差仍朝饱和方向推动时，冻结积分。
-// -----------------------------------------------------------------
-double PIController::update(double error)
-{
-    double u = kp * error + integral;                  // 位置式 PI
-    u = std::clamp(u, out_min, out_max);
-
-    const bool sat_high  = (u >= out_max) && (error > 0.0);
-    const bool sat_low   = (u <= out_min) && (error < 0.0);
-    const bool gate_open = std::abs(error) <= integ_gate;   // 积分分离
-    if (gate_open && !sat_high && !sat_low)
-        integral += ki * error;                        // 只在未饱和时积分
-
-    return u;
-}
-
-// -----------------------------------------------------------------
-// 功率闭环放大器（离散 PI）
-// 被控对象：y[n] = g * x[n]  =>  平均功率 P = g^2 * P_in（关于 g 非线性）
-// 控制律：
-//   e     = P_target - P_meas                       (功率差, W)
-//   e_rel = e / P_meas                              (归一化, 无量纲)
-//   u     = kp * e_rel + Σ (ki * e_rel)             (PI 输出, 无量纲)
-//   期望功率 P_des = P_meas * (1 + u)
-// 由于功率 ∝ g^2，对应增益缩放 s = sqrt(1 + u)，故 g <- g * s。
-// 当 kp = 1 时 P_des = P_meas + e = P_target，可单步命中目标；
-// 积分项用于消除残差并适应模型误差。
-//
-// 功率感知：
-//   Analytic  标量增益下 P(g) = g^2 * P_in，P_in 只在循环外算一次，
-//             每轮 O(1)；输出信号仅在收敛后重建一次。
-//   Measured  每轮重建 y 并遍历求功率，O(N)。为频域响应 H(f)、
-//             饱和/限幅、AM-PM 等非标量模型预留的"真实测量"路径。
-// -----------------------------------------------------------------
-PowerLoopReport amplifyToTargetPower(const ComplexVec& input, double target_power)
-{
-    return amplifyToTargetPower(input, target_power, PowerLoopConfig{});
-}
-
-PowerLoopReport amplifyToTargetPower(const ComplexVec& input,
-                                     double target_power,
-                                     const PowerLoopConfig& cfg)
-{
-    const double kp           = cfg.kp;
-    const double ki           = cfg.ki;
-    const int    max_iter     = cfg.max_iter;
-    const double initial_gain = cfg.initial_gain;
-    const double max_gain     = cfg.max_gain;
-    std::vector<double>* const history = cfg.history;   // 指向外部容器，可为空
-    PowerLoopReport rep;
-    rep.output = input;                    // 未收敛/异常时退化为直通
-    rep.gain   = initial_gain;
-
-    if (input.empty() || target_power <= 0.0 || max_iter <= 0 || max_gain <= 0.0)
-        return rep;
-
-    // 输入功率只需算一次：标量增益下 P_out = g^2 * P_in
-    const double p_in = measureSignalPower(input);
-
-    // 全零输入无法被放大到任意功率
-    if (p_in <= 0.0) {
-        rep.power     = 0.0;
-        rep.abs_error = target_power;
-        rep.rel_error = 1.0;               // 实际功率为 0，相对误差 100%
-        return rep;
+    for (std::size_t i = 0; i < n; ++i) {
+        in[i][0] = x[i].real();
+        in[i][1] = x[i].imag();
     }
 
-    PIController pi;
-    pi.kp         = kp;
-    pi.ki         = ki;
-    pi.integ_gate = cfg.integ_gate;
-    pi.reset();
+    fftw_plan plan = fftw_plan_dft_1d(static_cast<int>(n), in, res, sign, FFTW_ESTIMATE);
+    fftw_execute(plan);
 
-    double g = (initial_gain > 0.0) ? std::min(initial_gain, max_gain) : 1.0;
+    for (std::size_t i = 0; i < n; ++i)
+        out[i] = Complex(res[i][0], res[i][1]);
 
-    // 放大器：y = g * x（Measured 模式下每轮都要真实重建）
-    const auto amplify = [&input](double gain) {
-        ComplexVec y(input.size());
-        for (std::size_t n = 0; n < input.size(); ++n)
-            y[n] = input[n] * gain;
-        return y;
-    };
+    fftw_destroy_plan(plan);
+    fftw_free(in);
+    fftw_free(res);
+    return out;
+}
 
-    double p_meas = 0.0;
+ComplexVec fft(const ComplexVec& x)
+{
+    return fftwTransform(x, FFTW_FORWARD);
+}
 
-    for (int k = 0; k < max_iter; ++k) {
-        // 1) 放大器作用 + 2) 测量实际功率
-        if (cfg.sense == PowerSenseMode::Analytic) {
-            p_meas = g * g * p_in;                 // O(1)，不解向量
-        } else {
-            p_meas = measureSignalPower(amplify(g)); // O(N)，真实测量
+ComplexVec ifft(const ComplexVec& x)
+{
+    ComplexVec out = fftwTransform(x, FFTW_BACKWARD);
+    if (out.empty()) return out;
+
+    const double inv = 1.0 / static_cast<double>(out.size());
+    for (auto& c : out) c *= inv;
+    return out;
+}
+
+ComplexVec fftShift(const ComplexVec& x)
+{
+    const std::size_t n = x.size();
+    ComplexVec out(n);
+    if (n == 0) return out;
+
+    const std::size_t half = n / 2;
+    for (std::size_t i = 0; i < n; ++i)
+        out[i] = x[(i + half) % n];
+    return out;
+}
+
+ComplexVec2D matchedFilterFrame(const ComplexVec2D& pulses,
+                                const ComplexVec& ref,
+                                MatchFilterMode mode)
+{
+    ComplexVec2D frame;
+    if (pulses.empty() || ref.empty()) return frame;
+
+    frame.reserve(pulses.size());
+    for (const ComplexVec& p : pulses)
+        frame.push_back(matchedFilter(p, ref, mode, false));
+
+    return frame;
+}
+
+ComplexVec2D rangeDopplerMap(const ComplexVec2D& slow_time)
+{
+    if (slow_time.empty()) return ComplexVec2D();
+
+    const std::size_t n_pulse = slow_time.size();
+    const std::size_t n_range = slow_time[0].size();
+    if (n_pulse == 0 || n_range == 0) return ComplexVec2D();
+
+    /// 按列优先重排：同一距离门的 N 个慢时间样点连续存放，
+    /// 这样一次批量规划就能算完所有距离门。
+    fftw_complex* buf = fftw_alloc_complex(n_pulse * n_range);
+    if (!buf) return ComplexVec2D();
+
+    for (std::size_t r = 0; r < n_range; ++r) {
+        for (std::size_t p = 0; p < n_pulse; ++p) {
+            const Complex v = (p < slow_time.size() && r < slow_time[p].size())
+                            ? slow_time[p][r] : Complex(0.0, 0.0);
+            buf[r * n_pulse + p][0] = v.real();
+            buf[r * n_pulse + p][1] = v.imag();
         }
-        if (history) history->push_back(p_meas);   // 注：history 为外部容器指针
-
-        // 3) 理想功率 - 实际功率
-        const double err = target_power - p_meas;
-        const double rel = std::abs(err) / target_power;
-
-        rep.iterations = k + 1;
-        rep.gain       = g;
-        rep.power      = p_meas;
-        rep.abs_error  = err;
-        rep.rel_error  = rel;
-
-        // 4) 收敛判据：相对误差小于阈值
-        if (rel < cfg.tol_rel) {
-            rep.converged = true;
-            break;
-        }
-
-        // 5) 误差代入 PI，得到功率修正比例 u
-        const double p_ref = std::max(p_meas, target_power * 1.0e-12); // 防止除零
-        const double e_rel = err / p_ref;              // 归一化功率误差
-        const double u     = pi.update(e_rel);
-
-        // 6) 功率修正 -> 增益修正（功率 ∝ g^2，故取 sqrt）
-        const double scale = std::sqrt(std::max(0.0, 1.0 + u));
-        g = std::min(g * scale, max_gain);
     }
 
-    // 输出信号只在收尾时重建一次（标量增益下与逐轮重建完全等价）
-    rep.gain   = g;
-    rep.output = amplify(g);
-    rep.power  = p_in * g * g;
+    const int n = static_cast<int>(n_pulse);
+    const int howmany = static_cast<int>(n_range);
+    fftw_plan plan = fftw_plan_many_dft(1, &n, howmany,
+                                        buf, nullptr, 1, n,
+                                        buf, nullptr, 1, n,
+                                        FFTW_FORWARD, FFTW_ESTIMATE);
+    fftw_execute(plan);
 
-    return rep;
+    /// 顺带做 fftShift：行号 k 取原始 bin (k + N/2) % N，中心行即 0 Hz
+    ComplexVec2D rd(n_pulse, ComplexVec(n_range));
+    const std::size_t half = n_pulse / 2;
+    for (std::size_t r = 0; r < n_range; ++r) {
+        for (std::size_t k = 0; k < n_pulse; ++k) {
+            const std::size_t src = (k + half) % n_pulse;
+            rd[k][r] = Complex(buf[r * n_pulse + src][0], buf[r * n_pulse + src][1]);
+        }
+    }
+
+    fftw_destroy_plan(plan);
+    fftw_free(buf);
+    return rd;
+}
+
+std::vector<double> rangeAxis(std::size_t n_range, double dt)
+{
+    std::vector<double> axis(n_range, 0.0);
+    for (std::size_t r = 0; r < n_range; ++r)
+        axis[r] = static_cast<double>(r) * dt * c / 2.0;
+    return axis;
+}
+
+std::vector<double> dopplerAxis(std::size_t n_pulse, double pri)
+{
+    std::vector<double> axis(n_pulse, 0.0);
+    if (n_pulse == 0 || pri <= 0.0) return axis;
+
+    const long n = static_cast<long>(n_pulse);
+    const long half = n / 2;
+    const double df = 1.0 / (static_cast<double>(n) * pri);
+    for (long i = 0; i < n; ++i)
+        axis[static_cast<std::size_t>(i)] = static_cast<double>(i - half) * df;
+    return axis;
+}
+
+std::vector<double> velocityAxis(std::size_t n_pulse, double pri, double wavelength)
+{
+    std::vector<double> axis = dopplerAxis(n_pulse, pri);
+    for (double& f : axis) f = f * wavelength / 2.0;
+    return axis;
+}
+
+RangeDopplerPeak findRangeDopplerPeak(const ComplexVec2D& rd,
+                                      double pri,
+                                      double dt,
+                                      double wavelength)
+{
+    RangeDopplerPeak peak;
+    if (rd.empty() || rd[0].empty()) return peak;
+
+    const std::size_t n_pulse = rd.size();
+    const std::size_t n_range = rd[0].size();
+
+    /// 1) 整数栅格上的最大值
+    for (std::size_t k = 0; k < n_pulse; ++k) {
+        for (std::size_t r = 0; r < n_range; ++r) {
+            const double p = std::norm(rd[k][r]);
+            if (p > peak.power) {
+                peak.power = p;
+                peak.doppler_index = k;
+                peak.range_index   = r;
+            }
+        }
+    }
+
+    /// 2) 多普勒方向做三点抛物线插值，得到亚栅格峰值
+    const std::size_t k0 = peak.doppler_index;
+    double delta = 0.0;
+    if (k0 > 0 && k0 + 1 < n_pulse) {
+        const double ym = std::norm(rd[k0 - 1][peak.range_index]);
+        const double y0 = std::norm(rd[k0][peak.range_index]);
+        const double yp = std::norm(rd[k0 + 1][peak.range_index]);
+        const double den = ym - 2.0 * y0 + yp;
+        if (den != 0.0) delta = 0.5 * (ym - yp) / den;
+        delta = std::max(-1.0, std::min(1.0, delta));
+    }
+
+    /// 3) 行号 -> 物理量
+    const double df = (n_pulse > 1 && pri > 0.0)
+                    ? 1.0 / (static_cast<double>(n_pulse) * pri) : 0.0;
+    const double bin = static_cast<double>(k0) + delta
+                     - static_cast<double>(n_pulse / 2);
+
+    peak.doppler_hz = bin * df;
+    peak.velocity   = peak.doppler_hz * wavelength / 2.0;
+    peak.range_m    = static_cast<double>(peak.range_index) * dt * c / 2.0;
+    return peak;
 }

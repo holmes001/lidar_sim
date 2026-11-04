@@ -16,17 +16,21 @@ set(SOURCES
     ${CMAKE_CURRENT_SOURCE_DIR}/Src/power.cpp
     ${CMAKE_CURRENT_SOURCE_DIR}/Src/transport.cpp
     ${CMAKE_CURRENT_SOURCE_DIR}/Src/plot.cpp
+    ${CMAKE_CURRENT_SOURCE_DIR}/Src/app.cpp
+    ${CMAKE_CURRENT_SOURCE_DIR}/Src/doppler.cpp
     ${CMAKE_CURRENT_SOURCE_DIR}/Src/main.cpp
 
 )
 
 set(HEADERS
-    ${CMAKE_CURRENT_SOURCE_DIR}/Inc/complex_types.h
+    ${CMAKE_CURRENT_SOURCE_DIR}/Inc/typedef.h
     ${CMAKE_CURRENT_SOURCE_DIR}/Inc/filter.h
     ${CMAKE_CURRENT_SOURCE_DIR}/Inc/power.h
     ${CMAKE_CURRENT_SOURCE_DIR}/Inc/random_error.h
     ${CMAKE_CURRENT_SOURCE_DIR}/Inc/transport.h
     ${CMAKE_CURRENT_SOURCE_DIR}/Inc/plot.h
+    ${CMAKE_CURRENT_SOURCE_DIR}/Inc/app.h
+    ${CMAKE_CURRENT_SOURCE_DIR}/Inc/doppler.h
 )
 
 # include files

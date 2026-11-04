@@ -7,10 +7,7 @@
 
 #include <cstddef>
 
-#include "complex_types.h"
-
-constexpr double kpi = 3.14159265358979323846;   ///< 圆周率
-const double c = 3.0e8;                          ///< 光速 [m/s]
+#include "typedef.h"
 
 /**
  * @brief 雷达参数
@@ -100,6 +97,19 @@ double round_trip_delay(double R);
 void generate_a_signal(ComplexVec &u,const radar &radar_1,waveform wave_1);
 
 /**
+ * @brief 从发射记录中截出一个码元，作为匹配滤波参考
+ * @param tx 发射复包络
+ * @param w  波形参数，决定截取方式
+ * @param r  雷达参数，提供 dt
+ * @return 参考模板
+ *
+ * @note 有限长包络（WF_PULSE / WF_FMCW）取包络非零段，此时峰位直接对应回波延时；
+ *       周期型包络（WF_SINE / WF_SQUARE / WF_IMPULSE）取一个周期。
+ * @warning param 是 union，必须按 kind 读对应成员；跨成员读取属类型双关。
+ */
+ComplexVec make_reference(const ComplexVec &tx,const waveform &w,const radar &r);
+
+/**
  * @brief 合成单目标回波
  * @param u        发射复包络（保留以兼容旧调用，当前不参与计算）
  * @param radar_1  雷达参数（含 noise_sigma）
@@ -115,5 +125,36 @@ void generate_a_signal(ComplexVec &u,const radar &radar_1,waveform wave_1);
 ComplexVec recieve_signal(
     const ComplexVec &u,const radar &radar_1,const object &object_1,
     const waveform &wave,double t_offset = 0.0);
+
+/**
+ * @brief 一帧脉冲多普勒的采集参数
+ *
+ * @warning pri 必须 ≥ samp·dt：接收窗长超过一个 PRI 时，第 p 个脉冲的窗口
+ *          会盖住第 p+1 个脉冲的回波（串脉冲）。
+ * @note 不模糊距离 = c·PRI/2；多普勒分辨率 = 1/(n_pulse·PRI)。
+ */
+typedef struct
+{
+    int    n_pulse;   ///< 每帧脉冲数 N（即慢时间点数）
+    double pri;       ///< 脉冲重复间隔 [s]
+}pulse_doppler_frame;
+
+/**
+ * @brief 按发射时序逐脉冲开窗，组装一帧回波
+ * @param u        发射复包络（透传给 recieve_signal，当前不参与计算）
+ * @param radar_1  雷达参数；radar_1.samp 即每个脉冲的接收窗长度
+ * @param object_1 目标参数
+ * @param wave     波形参数
+ * @param frame    帧参数（脉冲数、PRI）
+ * @return 回波矩阵，行 = 脉冲序号（慢时间），列 = 快时间样点，尺寸 n_pulse × samp
+ * @throws std::invalid_argument n_pulse <= 0、pri <= 0，或 samp·dt > pri
+ *
+ * @note 行号 p 由**发射时序** t = p·PRI 直接决定，不依赖任何峰值检测：
+ *       慢时间相位基准必须锚在发射时刻上，用检测到的峰去定行号会在漏检时
+ *       造成相位断裂、多普勒谱展宽。
+ */
+ComplexVec2D recieve_frame(
+    const ComplexVec &u,const radar &radar_1,const object &object_1,
+    const waveform &wave,const pulse_doppler_frame &frame);
 
 #endif

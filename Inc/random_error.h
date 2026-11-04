@@ -5,7 +5,7 @@
 #ifndef RANDOM_ERROR_H
 #define RANDOM_ERROR_H
 
-#include "complex_types.h"
+#include "typedef.h"
 
 #include <random>
 #include <cmath>

@@ -7,6 +7,7 @@
 #include <algorithm>
 #include <cmath>
 #include <cstddef>
+#include <stdexcept>
 #include <vector>
 #include <complex>
 
@@ -126,6 +127,49 @@ void generate_a_signal(ComplexVec &u,const radar &radar_1,waveform wave_1)
     }
 }
 
+/**
+ * @brief 从发射记录中截出一个码元，作为匹配滤波参考
+ * @param tx 发射复包络
+ * @param w  波形参数，决定截取方式
+ * @param r  雷达参数，提供 dt
+ * @return 参考模板
+ */
+ComplexVec make_reference(const ComplexVec &tx,
+                          const waveform &w, const radar &r)
+{
+    ComplexVec ref;
+    if (tx.empty()) return ref;
+
+    if (w.kind == WF_PULSE || w.kind == WF_FMCW)
+    {
+        std::size_t lo = 0, hi = tx.size();
+        while (lo < hi && std::abs(tx[lo]) == 0.0) ++lo;
+        while (hi > lo && std::abs(tx[hi - 1]) == 0.0) --hi;
+        if (lo < hi)
+            ref.assign(tx.begin() + static_cast<std::ptrdiff_t>(lo),
+                       tx.begin() + static_cast<std::ptrdiff_t>(hi));
+        return ref;
+    }
+
+    double period = 0.0;
+    switch (w.kind)
+    {
+    case WF_SINE:    period = w.param.sine.period_s;    break;
+    case WF_SQUARE:  period = w.param.square.period_s;  break;
+    case WF_IMPULSE: period = w.param.impulse.period_s; break;
+    default:         period = 0.0;                      break;
+    }
+
+    std::size_t len = (period > 0.0 && r.dt > 0.0)
+                    ? static_cast<std::size_t>(std::llround(period / r.dt)) : 0;
+    const std::size_t cap = std::max<std::size_t>(2, tx.size() / 8);
+    len = std::min(std::max<std::size_t>(len, 2), cap);
+    len = std::min(len, tx.size());
+
+    ref.assign(tx.begin(), tx.begin() + len);
+    return ref;
+}
+
 
 ComplexVec recieve_signal(
     const ComplexVec &u,const radar &radar_1,const object &object_1,
@@ -165,4 +209,31 @@ ComplexVec recieve_signal(
 
     /// 噪声只由接收机决定，与距离及目标是否存在无关；逐次递增 g_seed 保证不相关
     return addGaussianNoiseStd(v, radar_1.noise_sigma, 0.0, g_seed++);
+}
+
+
+ComplexVec2D recieve_frame(
+    const ComplexVec &u,const radar &radar_1,const object &object_1,
+    const waveform &wave,const pulse_doppler_frame &frame)
+{
+    if (frame.n_pulse <= 0)
+        throw std::invalid_argument("n_pulse must be > 0");
+    if (frame.pri <= 0.0)
+        throw std::invalid_argument("pri must be > 0");
+
+    /// 接收窗不能跨过一个 PRI，否则第 p 个脉冲的窗口会盖住第 p+1 个脉冲的回波
+    const double window = static_cast<double>(radar_1.samp) * radar_1.dt;
+    if (window > frame.pri)
+        throw std::invalid_argument("receive window (samp*dt) must not exceed pri");
+
+    /// 行号由发射时序 t = p·PRI 给出，不使用任何峰值检测：
+    /// 慢时间相位基准必须锚在发射时刻上。
+    ComplexVec2D echoes;
+    echoes.reserve(static_cast<std::size_t>(frame.n_pulse));
+    for (int p = 0; p < frame.n_pulse; ++p)
+    {
+        echoes.push_back(recieve_signal(u, radar_1, object_1, wave,
+                                        static_cast<double>(p) * frame.pri));
+    }
+    return echoes;
 }

@@ -1,6 +1,6 @@
 /**
  * @file    app.cpp
- * @brief   通用小工具实现：FFT、取样、坐标轴、存图
+ * @brief   Generic helpers: FFT, sampling, axes, figure saving
  */
 #include "app.h"
 
@@ -16,11 +16,12 @@
 #include <fftw3.h>
 
 /**
- * @brief 单序列 FFT/IFFT 的公共实现
- * @param x    输入序列
- * @param sign FFTW_FORWARD 或 FFTW_BACKWARD
- * @return 变换结果，长度与输入相同，不做归一化
- * @note 每次调用都新建计划；批量场景请用 doppler.cpp 里 rangeDopplerMap 的一次性规划。
+ * @brief Shared FFT/IFFT implementation for a single series
+ * @param x    Input series
+ * @param sign FFTW_FORWARD or FFTW_BACKWARD
+ * @return Transform of the same length as the input, not normalized
+ * @note A new plan is created on every call; for batch use, rely on the single plan in
+ *       rangeDopplerMap (doppler.cpp).
  */
 static ComplexVec fftwTransform(const ComplexVec& x, int sign)
 {
@@ -77,10 +78,10 @@ ComplexVec fftShift(const ComplexVec& x)
 }
 
 /**
- * @brief 图片输出目录
- * @return <工程根>/figs
- * @note 以本文件路径为基准回退两级，因此无论从 build/ 还是工程根启动，
- *       图片都落到工程根的 figs/ 下。
+ * @brief Figure output directory
+ * @return <project root>/figs
+ * @note Two levels up from this file, so figures always land in the project root's
+ *       figs/ whether the program starts from build/ or from the project root.
  */
 static std::filesystem::path fig_dir()
 {
@@ -88,7 +89,7 @@ static std::filesystem::path fig_dir()
     return self.parent_path().parent_path() / "figs";
 }
 
-/// 取复信号的实部
+/// Real part of a complex signal
 std::vector<double> vector_real(const ComplexVec &u)
 {
     std::vector<double> v(u.size());
@@ -101,9 +102,9 @@ std::vector<double> vector_real(const ComplexVec &u)
 
 
 /**
- * @brief 取复信号的模
- * @param u 复信号
- * @return 模信号
+ * @brief Magnitude of a complex signal
+ * @param u Complex signal
+ * @return Magnitude signal
  */
 std::vector<double> vector_abs(const ComplexVec &u)
 {
@@ -116,11 +117,12 @@ std::vector<double> vector_abs(const ComplexVec &u)
 }
 
 /**
- * @brief 时间轴：t[i] = i·dt
- * @param n  点数
- * @param dt 采样间隔 [s]
- * @return 时间序列 [µs]
- * @note 图函数默认横轴是采样序号，横轴有物理含义时须用 PlotLineXY 显式传入。
+ * @brief Time axis: t[i] = i*dt
+ * @param n  Number of points
+ * @param dt Sampling interval [s]
+ * @return Time sequence [us]
+ * @note Plot functions default to the sample index as x; use PlotLineXY whenever the
+ *       axis has physical meaning.
  */
 std::vector<double> time_axis(std::size_t n, double dt)
 {
@@ -131,14 +133,15 @@ std::vector<double> time_axis(std::size_t n, double dt)
 }
 
 /**
- * @brief 按时间窗截取曲线
- * @param t_us  完整时间轴 [µs]
- * @param y     完整数据
- * @param t0    窗口起点 [µs]
- * @param t1    窗口终点 [µs]
- * @param t_out 截取后的时间轴
- * @param y_out 截取后的数据
- * @note 整段记录里信号只占很小一段（1 µs / 24 µs），不裁剪时波形会被压成一条竖线。
+ * @brief Crop a curve to a time window
+ * @param t_us  Full time axis [us]
+ * @param y     Full data
+ * @param t0    Window start [us]
+ * @param t1    Window end [us]
+ * @param t_out Cropped time axis
+ * @param y_out Cropped data
+ * @note The signal occupies a small fraction of the record (1 us out of 24 us); without
+ *       cropping the waveform is squeezed into a vertical line.
  */
 void crop_window(const std::vector<double> &t_us, const std::vector<double> &y,
                         double t0, double t1,
@@ -158,11 +161,11 @@ void crop_window(const std::vector<double> &t_us, const std::vector<double> &y,
 }
 
 /**
- * @brief 写盘
- * @param fig       已渲染的图像
- * @param file_path 绝对路径直接用；相对路径视为相对 <工程根>/figs，
- *                  目录不存在会自动创建
- * @return 保存成功返回 true
+ * @brief Write a figure to disk
+ * @param fig       Rendered image
+ * @param file_path An absolute path is used as is; a relative path is resolved against
+ *                  <project root>/figs, and missing directories are created
+ * @return true if the figure was saved
  */
 bool save_figure(const cv::Mat &fig, const std::string &file_path)
 {
@@ -183,11 +186,11 @@ bool save_figure(const cv::Mat &fig, const std::string &file_path)
 }
 
 /**
- * @brief 绘图并保存
- * @param a         待绘制的数据矩阵
- * @param st        绘图样式
- * @param file_path 保存路径，规则同 save_figure
- * @return 保存成功返回 true
+ * @brief Plot and save
+ * @param a         Data matrix to draw
+ * @param st        Plot style
+ * @param file_path Output path, same rules as save_figure
+ * @return true if the figure was saved
  */
 bool save_picture(const cv::Mat &a, const pl::Style &st, const std::string &file_path)
 {

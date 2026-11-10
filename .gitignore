@@ -1,13 +1,13 @@
-# CMake 构建输出
+# CMake build output
 build/
 cmake-build-*/
 
-# 编译产物
+# Compiler output
 *.exe
 *.obj
 *.o
 *.pdb
 *.ilk
 
-# 编辑器缓存
+# Editor cache
 .vscode/ipch/

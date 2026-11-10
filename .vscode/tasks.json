@@ -35,7 +35,7 @@
                 "-DCMAKE_BUILD_TYPE=Debug"
             ],
             "group": "build",
-            "detail": "配置CMake项目"
+            "detail": "Configure the CMake project"
         },
         {
             "label": "CMake Build",
@@ -52,7 +52,7 @@
                 "isDefault": true
             },
             "dependsOn": "CMake Configure",
-            "detail": "构建CMake项目"
+            "detail": "Build the CMake project"
         },
         {
             "label": "CMake Clean",
@@ -65,7 +65,7 @@
                 "clean"
             ],
             "group": "none",
-            "detail": "清理CMake构建"
+            "detail": "Clean the CMake build"
         },
          {
             "label": "Run Program",
@@ -77,7 +77,7 @@
         {
             "label": "Build and Run",
             "type": "shell",
-            "command": "echo",  // 只是占位符
+            "command": "echo",  // Placeholder only
             "args": ["Building and Running..."],
             "dependsOn": ["C++ Build (Debug)", "Run Program"],
             "group": "test"

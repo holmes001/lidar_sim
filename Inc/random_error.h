@@ -1,6 +1,6 @@
 /**
  * @file    random_error.h
- * @brief   高斯噪声注入
+ * @brief   Gaussian noise injection
  */
 #ifndef RANDOM_ERROR_H
 #define RANDOM_ERROR_H
@@ -14,14 +14,14 @@
 #include <string>
 
 /**
- * @brief 按总能量注入复高斯噪声（旧接口）
- * @param signal      输入信号
- * @param noiseEnergy 目标噪声总能量 Σ|n|²
- * @param mean        均值，只加在实部
- * @param seed        随机种子
- * @return 叠加噪声后的信号
- * @deprecated 噪声按整段信号总能量归一化，改变采样点数 samp 会改变实际 SNR。
- *             新代码请用 addGaussianNoiseStd。
+ * @brief Add complex Gaussian noise with a given total energy (legacy API)
+ * @param signal      Input signal
+ * @param noiseEnergy Target total noise energy sum(|n|^2)
+ * @param mean        Mean, applied to the real part only
+ * @param seed        Random seed
+ * @return Signal with noise added
+ * @deprecated Noise is normalized by the total energy of the record, so changing
+ *             samp changes the actual SNR. Use addGaussianNoiseStd instead.
  */
 ComplexVec addGaussianNoise(const ComplexVec& signal,
                                      double noiseEnergy,
@@ -29,13 +29,14 @@ ComplexVec addGaussianNoise(const ComplexVec& signal,
                                      unsigned int seed = std::random_device{}());
 
 /**
- * @brief 按标准差注入圆对称复高斯噪声
- * @param signal 输入信号
- * @param stddev 每个 I/Q 分量的标准差
- * @param mean   均值，只加在实部
- * @param seed   随机种子
- * @return 叠加噪声后的信号
- * @note 实部与虚部各自独立抽样，噪声功率与采样点数无关。
+ * @brief Add circularly symmetric complex Gaussian noise with a given stddev
+ * @param signal Input signal
+ * @param stddev Standard deviation of each I/Q component
+ * @param mean   Mean, applied to the real part only
+ * @param seed   Random seed
+ * @return Signal with noise added
+ * @note Real and imaginary parts are sampled independently, so the noise power
+ *       does not depend on the number of samples.
  */
 ComplexVec addGaussianNoiseStd(const ComplexVec& signal,
                                         double stddev,

@@ -1,6 +1,6 @@
 /**
  * @file    filter.h
- * @brief   匹配滤波
+ * @brief   Matched filtering
  */
 #ifndef FILTER_H
 #define FILTER_H
@@ -10,21 +10,22 @@
 
 #include "typedef.h"
 
-/** @brief 匹配滤波输出模式 */
+/** @brief Matched filter output mode */
 enum class MatchFilterMode {
-    Full,   ///< 长度 N+M-1；峰值位置 = 匹配起点 + M-1
-    Same,   ///< 长度 N；输出索引 t 即"信号从 t 开始匹配"的强度
-    Valid   ///< 长度 N-M+1（要求 N>=M）；不补零，完全重叠区
+    Full,   ///< Length N+M-1; peak position = match start + M-1
+    Same,   ///< Length N; index t is the score of "matching a signal from t"
+    Valid   ///< Length N-M+1 (requires N>=M); no zero padding, overlap only
 };
 
 /**
- * @brief 匹配滤波：y = signal ⊛ h，h[k] = conj(ref[M-1-k])
- * @param signal                输入复信号
- * @param ref                   参考模板，通常取发射波形
- * @param mode                  输出长度与对齐方式
- * @param normalizeByRefEnergy  为 true 时按 ref 总能量归一化，完全匹配时峰值为 1
- * @return 滤波后的复信号；任一输入为空时返回空
- * @note 直接时域卷积，复杂度 O(N·M)。
+ * @brief Matched filter: y = signal conv h, with h[k] = conj(ref[M-1-k])
+ * @param signal                Input complex signal
+ * @param ref                   Reference template, usually the transmit waveform
+ * @param mode                  Output length and alignment
+ * @param normalizeByRefEnergy  If true, scale by the total energy of ref so a
+ *                              perfect match peaks at 1
+ * @return Filtered complex signal; empty if either input is empty
+ * @note Direct time-domain convolution, complexity O(N*M).
  */
 ComplexVec matchedFilter(const ComplexVec& signal,
                          const ComplexVec& ref,

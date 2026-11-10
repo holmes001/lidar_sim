@@ -1,21 +1,23 @@
 /**
  * @file    plot.cpp
- * @brief   plot.h 的实现
+ * @brief   Implementation of plot.h
  *
  * @details
- * 本文件包含 `plot.h` 的全部实现。对外只暴露 `plot.h` 里声明的函数；
- * 绘图原语（画笔、刻度、图例等）放在**匿名命名空间**里，具有内部链接，
- * 不会污染符号表，也不会和其它翻译单元冲突。
+ * This file implements everything declared in `plot.h`. Only the functions declared
+ * there are exported; the drawing primitives (painter, ticks, legend, ...) live in an
+ * **anonymous namespace**, so they have internal linkage, stay out of the symbol table
+ * and cannot clash with other translation units.
  *
- * @note 依赖的 OpenCV 模块：`core`（数据结构）、`imgproc`（applyColorMap /
- *       resize / 绘制原语）、`imgcodecs`（仅 `Save()` 用 imwrite）。
+ * @note OpenCV modules used: `core` (data structures), `imgproc` (applyColorMap /
+ *       resize / drawing primitives), `imgcodecs` (only `Save()`, via imwrite).
  *
- * @note 实现里的两个关键点：
- *       1. **超采样**：所有绘制都在 `ss` 倍大的画布上进行，结束后再用
- *          `INTER_AREA` 降采样 —— 因为 `cv::line` 没有抗锯齿。
- *       2. **半透明混合**：先 clone 一份 overlay，在多边形上填充后
- *          `addWeighted(overlay, a, canvas, 1-a)`；因为 overlay 在多边形之外
- *          与 canvas 完全相同，所以那些像素混合后不变，等价于只对多边形做 alpha。
+ * @note Two key implementation points:
+ *       1. **Supersampling**: all drawing happens on a canvas `ss` times larger and is
+ *          then downsampled with `INTER_AREA`, because `cv::line` has no anti-aliasing.
+ *       2. **Translucent blending**: clone an overlay, fill the polygon on it, then
+ *          `addWeighted(overlay, a, canvas, 1-a)`; outside the polygon the overlay is
+ *          identical to the canvas, so those pixels are unchanged and this is equivalent
+ *          to applying alpha to the polygon only.
  */
 
 #include "plot.h"
@@ -34,47 +36,47 @@ namespace plot
 {
 
 /* ========================================================================== */
-/*                          内部实现（匿名命名空间）                            */
+/*                          Internal helpers (anonymous namespace)             */
 /* ========================================================================== */
 
 namespace
 {
 
-/** @brief 缺省调色板（matplotlib tab10 的近似色，**BGR 顺序**） */
+/** @brief Default palette (approximation of matplotlib tab10, **BGR order**) */
 const std::vector<cv::Scalar> &Palette()
 {
     static const std::vector<cv::Scalar> kPalette = {
-        cv::Scalar(180, 119, 31),    // #1f77b4 蓝
-        cv::Scalar(14, 127, 255),    // #ff7f0e 橙
-        cv::Scalar(44, 160, 44),     // #2ca02c 绿
-        cv::Scalar(40, 39, 214),     // #d62728 红
-        cv::Scalar(189, 103, 148),   // #9467bd 紫
-        cv::Scalar(75, 86, 140),     // #8c564b 棕
-        cv::Scalar(194, 119, 227),   // #e377c2 粉
-        cv::Scalar(127, 127, 127),   // #7f7f7f 灰
-        cv::Scalar(188, 189, 34),    // #bcbd22 黄绿
-        cv::Scalar(23, 190, 207)     // #17becf 青
+        cv::Scalar(180, 119, 31),    // #1f77b4 blue
+        cv::Scalar(14, 127, 255),    // #ff7f0e orange
+        cv::Scalar(44, 160, 44),     // #2ca02c green
+        cv::Scalar(40, 39, 214),     // #d62728 red
+        cv::Scalar(189, 103, 148),   // #9467bd purple
+        cv::Scalar(75, 86, 140),     // #8c564b brown
+        cv::Scalar(194, 119, 227),   // #e377c2 pink
+        cv::Scalar(127, 127, 127),   // #7f7f7f gray
+        cv::Scalar(188, 189, 34),    // #bcbd22 olive
+        cv::Scalar(23, 190, 207)     // #17becf cyan
     };
     return kPalette;
 }
 
-/** @brief 取第 i 个调色板颜色（循环） */
+/** @brief Get the i-th palette color (wrapping around) */
 cv::Scalar ColorAt(int i)
 {
     const auto &p = Palette();
     return p[static_cast<size_t>(i) % p.size()];
 }
 
-/** @brief 数值是否为有效点（非 NaN / 非 Inf） */
+/** @brief Whether a value is a valid point (not NaN / not Inf) */
 bool Finite(double v)
 {
     return std::isfinite(v);
 }
 
 /**
- * @brief 把任意深度/通道的 `cv::Mat` 转成单通道 `CV_64F`
- * @param m 输入（支持 CV_8U/16U/32S/32F/64F，多通道只取第一通道）
- * @return 新的 CV_64F 矩阵（深拷贝）
+ * @brief Convert any depth/channel `cv::Mat` into a single-channel `CV_64F`
+ * @param m Input (CV_8U/16U/32S/32F/64F supported; multi-channel takes channel 0)
+ * @return New CV_64F matrix (deep copy)
  */
 cv::Mat ToF64(const cv::Mat &m)
 {
@@ -101,13 +103,13 @@ cv::Mat ToF64(const cv::Mat &m)
     return src;
 }
 
-/** @brief 判断矩阵是否是"一维"（1×N 或 N×1） */
+/** @brief Whether the matrix is "1-D" (1xN or Nx1) */
 bool IsVector(const cv::Mat &m)
 {
     return (m.rows == 1) || (m.cols == 1);
 }
 
-/** @brief 把一维矩阵展开成 `std::vector<double>`（行优先） */
+/** @brief Flatten a 1-D matrix into a `std::vector<double>` (row-major) */
 std::vector<double> Flatten(const cv::Mat &m)
 {
     std::vector<double> out;
@@ -123,9 +125,9 @@ std::vector<double> Flatten(const cv::Mat &m)
 }
 
 /**
- * @brief 把二维矩阵拆成"每行一条序列"
- * @param m 输入（若是一维，则返回只有一条序列）
- * @return 序列列表，每个元素长度 = 采样点数
+ * @brief Split a 2-D matrix into "one series per row"
+ * @param m Input (a 1-D input yields a single series)
+ * @return List of series, each as long as the number of samples
  */
 std::vector<std::vector<double>> SplitSeries(const cv::Mat &m)
 {
@@ -155,11 +157,12 @@ std::vector<std::vector<double>> SplitSeries(const cv::Mat &m)
 }
 
 /**
- * @brief "漂亮"的数字步长（Heckbert 的 nice number 算法）
- * @param range 期望覆盖的数值跨度（正数）
- * @param round 是否取整到 1/2/5/10
- * @return 步长
- * @note 让刻度落在 1/2/5×10^n 上，而不是 0.37 这种数 —— 这是论文图好看的关键细节。
+ * @brief "Nice" number step (Heckbert's nice-number algorithm)
+ * @param range Span to cover (positive)
+ * @param round Whether to round to 1/2/5/10
+ * @return Step size
+ * @note Keeps ticks on 1/2/5 * 10^n instead of values like 0.37, which is the key
+ *       detail behind a clean publication figure.
  */
 double NiceNum(double range, bool round)
 {
@@ -185,12 +188,12 @@ double NiceNum(double range, bool round)
 }
 
 /**
- * @brief 生成覆盖 [lo, hi] 的漂亮刻度
- * @param lo   下界
- * @param hi   上界
- * @param want 期望刻度个数（提示值）
- * @param step 返回实际步长
- * @return 刻度值列表
+ * @brief Generate nice ticks covering [lo, hi]
+ * @param lo   Lower bound
+ * @param hi   Upper bound
+ * @param want Desired tick count (hint)
+ * @param step Returns the actual step
+ * @return List of tick values
  */
 std::vector<double> Ticks(double lo, double hi, int want, double &step)
 {
@@ -217,13 +220,13 @@ std::vector<double> Ticks(double lo, double hi, int want, double &step)
         out.push_back((std::fabs(v) < step * 1e-9) ? 0.0 : v);
         if (out.size() > 256U)
         {
-            break;    /* 防御：步长退化时避免死循环 */
+            break;    /* Defensive: avoid an infinite loop if the step degenerates */
         }
     }
     return out;
 }
 
-/** @brief 数字转字符串；`decimals < 0` 用 "%.4g" 短格式 */
+/** @brief Number to string; `decimals < 0` uses the short "%.4g" format */
 std::string NumToStr(double v, int decimals)
 {
     char buf[64];
@@ -240,17 +243,17 @@ std::string NumToStr(double v, int decimals)
 }
 
 /**
- * @brief 数据域到像素域的线性映射
- * @note y 方向传 `p0 = bottom`、`p1 = top` 即可实现像素坐标翻转。
+ * @brief Linear mapping from data domain to pixel domain
+ * @note Pass `p0 = bottom` and `p1 = top` for y to flip the pixel axis.
  */
 struct LinearAxis
 {
-    double lo = 0.0;    /**< 数据下界 */
-    double hi = 1.0;    /**< 数据上界 */
-    double p0 = 0.0;    /**< lo 对应的像素坐标 */
-    double p1 = 1.0;    /**< hi 对应的像素坐标 */
+    double lo = 0.0;    /**< Data lower bound */
+    double hi = 1.0;    /**< Data upper bound */
+    double p0 = 0.0;    /**< Pixel coordinate of lo */
+    double p1 = 1.0;    /**< Pixel coordinate of hi */
 
-    /** @brief 把数据值映射到像素坐标 */
+    /** @brief Map a data value to a pixel coordinate */
     double Map(double v) const
     {
         const double d = (hi - lo);
@@ -263,38 +266,40 @@ struct LinearAxis
 };
 
 /**
- * @brief 超采样画布上的画笔：所有坐标都是**逻辑坐标**，内部自动乘 ss
+ * @brief Painter on the supersampled canvas: all coordinates are **logical**, scaled by ss
+ *        internally
  *
- * @details 把所有绘制原语收进一个类，是为了让上层代码只关心逻辑坐标，
- * 同时统一处理"超采样倍数缩放"和"文字渲染器替换"两件事。
+ * @details Collecting every primitive in one class lets the upper layers work purely in
+ * logical coordinates while scaling by the supersample factor and swapping the text
+ * renderer happen in one place.
  */
 class Painter
 {
 public:
     /**
-     * @param canvas 已超采样的目标画布
-     * @param ss     超采样倍数
-     * @param tr     文字渲染器（可为 nullptr）
+     * @param canvas Supersampled target canvas
+     * @param ss     Supersample factor
+     * @param tr     Text renderer (may be nullptr)
      */
     Painter(cv::Mat &canvas, int ss, const TextRenderer &tr)
         : img_(canvas), ss_(ss), tr_(tr)
     {
     }
 
-    /** @brief 逻辑坐标 -> 像素坐标 */
+    /** @brief Logical coordinates -> pixel coordinates */
     cv::Point P(double x, double y) const
     {
         return cv::Point(cvRound(x * ss_), cvRound(y * ss_));
     }
 
-    /** @brief 画线段 */
+    /** @brief Draw a line segment */
     void Line(double x0, double y0, double x1, double y1, cv::Scalar color, double w)
     {
         cv::line(img_, P(x0, y0), P(x1, y1), color,
                  std::max(1, cvRound(w * ss_)), cv::LINE_8);
     }
 
-    /** @brief 画折线（逻辑坐标点列） */
+    /** @brief Draw a polyline (logical-coordinate point list) */
     void Polyline(const std::vector<cv::Point2d> &pts, cv::Scalar color, double w)
     {
         if (pts.size() < 2U)
@@ -311,7 +316,7 @@ public:
         cv::polylines(img_, ip, false, color, std::max(1, cvRound(w * ss_)), cv::LINE_8);
     }
 
-    /** @brief 填充多边形（逻辑坐标点列） */
+    /** @brief Fill a polygon (logical-coordinate point list) */
     void FillPoly(const std::vector<cv::Point2d> &pts, cv::Scalar color)
     {
         if (pts.size() < 3U)
@@ -330,29 +335,30 @@ public:
         cv::fillPoly(img_, polys, color, cv::LINE_8);
     }
 
-    /** @brief 画实心圆点 */
+    /** @brief Draw a filled dot */
     void Dot(double x, double y, int radius, cv::Scalar color)
     {
         cv::circle(img_, P(x, y), std::max(1, radius * ss_), color, cv::FILLED, cv::LINE_8);
     }
 
-    /** @brief 画矩形边框 */
+    /** @brief Draw a rectangle outline */
     void Rect(double x, double y, double w, double h, cv::Scalar color, double lw)
     {
         cv::rectangle(img_, P(x, y), P(x + w, y + h), color,
                       std::max(1, cvRound(lw * ss_)), cv::LINE_8);
     }
 
-    /** @brief 填充矩形 */
+    /** @brief Fill a rectangle */
     void FillRect(double x, double y, double w, double h, cv::Scalar color)
     {
         cv::rectangle(img_, P(x, y), P(x + w, y + h), color, cv::FILLED);
     }
 
     /**
-     * @brief 绘制文字（逻辑坐标 + 对齐）
-     * @note 文字尺寸用 `cv::getTextSize` 估算。自定义渲染器也按这个估算值对齐，
-     *       对等宽/近似等宽的字体足够；非等宽字体可能略有偏差。
+     * @brief Draw text (logical coordinates + alignment)
+     * @note Text size is estimated with `cv::getTextSize`. A custom renderer is aligned
+     *       using the same estimate, which is good enough for monospaced or nearly
+     *       monospaced fonts; proportional fonts may drift slightly.
      */
     void Text(const std::string &text, double x, double y, double scale,
               cv::Scalar color, Align ha = Align::Left, VAlign va = VAlign::Middle)
@@ -401,10 +407,10 @@ public:
         }
     }
 
-    /** @brief 取底层画布 */
+    /** @brief Access the underlying canvas */
     cv::Mat &Canvas() { return img_; }
 
-    /** @brief 超采样倍数 */
+    /** @brief Supersample factor */
     int Scale() const { return ss_; }
 
 private:
@@ -414,11 +420,11 @@ private:
 };
 
 /**
- * @brief 统计：跳过 NaN/Inf 求最小/最大值
- * @param series 序列集合
- * @param lo     输出最小值
- * @param hi     输出最大值
- * @return 有效点的个数
+ * @brief Statistics: min/max over valid points (NaN/Inf skipped)
+ * @param series Set of series
+ * @param lo     Output minimum
+ * @param hi     Output maximum
+ * @return Number of valid points
  */
 size_t MinMax(const std::vector<std::vector<double>> &series, double &lo, double &hi)
 {
@@ -449,9 +455,9 @@ size_t MinMax(const std::vector<std::vector<double>> &series, double &lo, double
 }
 
 /**
- * @brief 在矩形区域内画网格、边框、刻度与刻度值
- * @param rx,ry,rw,rh 绘图区（逻辑坐标）
- * @param xlo,xhi,y_lo,y_hi 数据域
+ * @brief Draw grid, frame, ticks and tick labels inside a rectangle
+ * @param rx,ry,rw,rh Plot area (logical coordinates)
+ * @param xlo,xhi,y_lo,y_hi Data domains
  */
 void DrawGridAndFrame(Painter &pt, const Style &st,
                       double rx, double ry, double rw, double rh,
@@ -470,12 +476,12 @@ void DrawGridAndFrame(Painter &pt, const Style &st,
     ax.lo = xlo; ax.hi = xhi; ax.p0 = rx; ax.p1 = rx + rw;
 
     LinearAxis ay;
-    ay.lo = y_lo; ay.hi = y_hi; ay.p0 = ry + rh; ay.p1 = ry;   /* 像素 y 轴向下 */
+    ay.lo = y_lo; ay.hi = y_hi; ay.p0 = ry + rh; ay.p1 = ry;   /* Pixel y axis points down */
 
     const double xstep = auto_xstep ? sx : st.x_tick_step;
     const double ystep = auto_ystep ? sy : st.y_tick_step;
 
-    /* ---- 网格 ---- */
+    /* ---- Grid ---- */
     if (st.grid)
     {
         if (auto_xstep)
@@ -509,10 +515,10 @@ void DrawGridAndFrame(Painter &pt, const Style &st,
         }
     }
 
-    /* ---- 边框 ---- */
+    /* ---- Frame ---- */
     pt.Rect(rx, ry, rw, rh, st.frame_color, 1.2);
 
-    /* ---- 刻度 + 刻度值 ---- */
+    /* ---- Ticks + tick labels ---- */
     const double tsc = st.font_scale * 0.82;
 
     auto one_x = [&](double v) {
@@ -548,7 +554,7 @@ void DrawGridAndFrame(Painter &pt, const Style &st,
     }
 }
 
-/** @brief 画标题（水平居中于整幅图） */
+/** @brief Draw the title (centered horizontally on the whole figure) */
 void DrawTitle(Painter &pt, const Style &st, double cx)
 {
     if (st.title.empty())
@@ -560,9 +566,10 @@ void DrawTitle(Painter &pt, const Style &st, double cx)
 }
 
 /**
- * @brief 画坐标轴标签（y 标签旋转 90°）
- * @note OpenCV 没有文字旋转 API，所以先画到临时小图，`cv::rotate` 后把
- *       "非背景色"的像素贴回主画布，实现文字贴图。
+ * @brief Draw the axis labels (the y label is rotated 90 degrees)
+ * @note OpenCV has no text rotation API, so the text is drawn to a small temporary image,
+ *       rotated with `cv::rotate`, and then only its non-background pixels are copied
+ *       back onto the main canvas.
  */
 void DrawAxisLabels(Painter &pt, const Style &st,
                     double rx, double ry, double rw, double rh)
@@ -624,14 +631,14 @@ void DrawAxisLabels(Painter &pt, const Style &st,
             }
             if (rot.at<cv::Vec3b>(r, c) == bg)
             {
-                continue;    /* 跳过背景色像素 */
+                continue;    /* Skip background pixels */
             }
             pt.Canvas().at<cv::Vec3b>(ty, tx) = rot.at<cv::Vec3b>(r, c);
         }
     }
 }
 
-/** @brief 画图例（白底 + 细框 + 色块 + 文字） */
+/** @brief Draw the legend (white box + thin border + color swatch + text) */
 void DrawLegend(Painter &pt, const Style &st,
                 const std::vector<std::string> &names,
                 const std::vector<cv::Scalar> &colors,
@@ -643,8 +650,8 @@ void DrawLegend(Painter &pt, const Style &st,
     }
 
     const double fs  = st.font_scale * 0.86;
-    const double lh  = std::max(18.0, 26.0 * fs);      /* 行高 */
-    const double sw  = 26.0;                          /* 色块宽 */
+    const double lh  = std::max(18.0, 26.0 * fs);      /* Row height */
+    const double sw  = 26.0;                          /* Swatch width */
     const double gap = 8.0;
 
     int base = 0;
@@ -699,7 +706,7 @@ void DrawLegend(Painter &pt, const Style &st,
     }
 }
 
-/** @brief 按超采样倍数创建画布并铺背景色 */
+/** @brief Create a canvas at the supersample factor and fill it with the background color */
 cv::Mat NewCanvas(const Style &st)
 {
     const int w = std::max(160, st.width) * std::max(1, st.supersample);
@@ -708,7 +715,7 @@ cv::Mat NewCanvas(const Style &st)
     return img;
 }
 
-/** @brief 把超采样画布降采样回逻辑尺寸 */
+/** @brief Downsample the supersampled canvas back to logical size */
 cv::Mat Finish(const cv::Mat &canvas, const Style &st)
 {
     cv::Mat out;
@@ -729,7 +736,7 @@ cv::Mat Finish(const cv::Mat &canvas, const Style &st)
 }   // namespace
 
 /* ========================================================================== */
-/*                              输入数据便捷构造                               */
+/*                          Input data helpers                                */
 /* ========================================================================== */
 
 cv::Mat Make1D(const std::vector<double> &v)
@@ -754,7 +761,7 @@ cv::Mat Make2D(const std::vector<std::vector<double>> &v)
     {
         if (row.size() != cols)
         {
-            throw std::invalid_argument("Make2D: 各行长度不一致");
+            throw std::invalid_argument("Make2D: rows have different lengths");
         }
     }
 
@@ -770,24 +777,25 @@ cv::Mat Make2D(const std::vector<std::vector<double>> &v)
 }
 
 /* ========================================================================== */
-/*                                  折线图                                     */
+/*                                 Line plot                                  */
 /* ========================================================================== */
 
 /* ========================================================================== */
-/*                    折线图核心（内部，两个公开入口共用）                      */
+/*          Line plot core (internal, shared by the two public entries)       */
 /* ========================================================================== */
 
 namespace
 {
 
 /**
- * @brief 折线图核心实现
- * @param px 横坐标数组；**nullptr 表示用采样序号 0..N−1**
- * @param series 纵坐标（一维 = 单曲线，二维 = 多曲线）
- * @param st 样式
- * @param series_in_cols 二维输入时是否按列取序列
- * @return BGR 图像
- * @note 横坐标与采样点数不一致时自动退化为序号轴（入口函数已先行校验）。
+ * @brief Line plot core implementation
+ * @param px x array; **nullptr means use the sample index 0..N-1**
+ * @param series y values (1-D = single curve, 2-D = multiple curves)
+ * @param st Style
+ * @param series_in_cols Whether a 2-D input is split by column
+ * @return BGR image
+ * @note If x is shorter than the sample count it falls back to the index axis (the entry
+ *       points validate this beforehand).
  */
 cv::Mat PlotLineImpl(const std::vector<double> *px,
                      const cv::Mat &series,
@@ -827,13 +835,13 @@ cv::Mat PlotLineImpl(const std::vector<double> *px,
         return Finish(NewCanvas(st), st);
     }
 
-    /* 横坐标长度不足则退化为序号轴，避免越界 */
+    /* Fall back to the index axis when x is too short, avoiding out-of-bounds access */
     if ((px != nullptr) && (px->size() < npts))
     {
         px = nullptr;
     }
 
-    /* ---- y 值域 ---- */
+    /* ---- y range ---- */
     double ylo = 0.0;
     double yhi = 0.0;
     MinMax(all, ylo, yhi);
@@ -857,7 +865,7 @@ cv::Mat PlotLineImpl(const std::vector<double> *px,
     ylo -= pad;
     yhi += pad;
 
-    /* ---- x 值域 ---- */
+    /* ---- x range ---- */
     double xlo = 0.0;
     double xhi = 1.0;
 
@@ -898,7 +906,7 @@ cv::Mat PlotLineImpl(const std::vector<double> *px,
         xhi = st.auto_x ? static_cast<double>(npts - 1U) : st.x_max;
     }
 
-    /* ---- 画布 ---- */
+    /* ---- Canvas ---- */
     cv::Mat canvas = NewCanvas(st);
     Painter pt(canvas, std::max(1, st.supersample), st.text_renderer);
 
@@ -915,7 +923,7 @@ cv::Mat PlotLineImpl(const std::vector<double> *px,
     LinearAxis ay;
     ay.lo = ylo; ay.hi = yhi; ay.p0 = ry + rh; ay.p1 = ry;
 
-    /* ---- 曲线 ---- */
+    /* ---- Curves ---- */
     for (size_t i = 0; i < all.size(); ++i)
     {
         const cv::Scalar color = ColorAt(static_cast<int>(i));
@@ -935,7 +943,7 @@ cv::Mat PlotLineImpl(const std::vector<double> *px,
             const double v = all[i][k];
             if (!Finite(v))
             {
-                flush();                       /* NaN 断开曲线 */
+                flush();                       /* NaN breaks the curve */
                 continue;
             }
 
@@ -945,13 +953,13 @@ cv::Mat PlotLineImpl(const std::vector<double> *px,
                 xv = (*px)[k];
                 if (!Finite(xv))
                 {
-                    flush();                   /* 横坐标缺失也断开 */
+                    flush();                   /* Missing x also breaks the curve */
                     continue;
                 }
             }
             else
             {
-                /* 序号轴：把 k 线性映射到 [xlo, xhi] */
+                /* Index axis: map k linearly onto [xlo, xhi] */
                 xv = ((xhi - xlo) > 1e-12)
                          ? (xlo + (xhi - xlo) * static_cast<double>(k) /
                                       static_cast<double>(std::max<size_t>(1U, n - 1U)))
@@ -969,7 +977,7 @@ cv::Mat PlotLineImpl(const std::vector<double> *px,
         flush();
     }
 
-    /* ---- 标注 ---- */
+    /* ---- Annotations ---- */
     DrawTitle(pt, st, 0.5 * st.width);
 
     {
@@ -998,17 +1006,17 @@ cv::Mat PlotLine(const cv::Mat &series, const Style &st, bool series_in_cols)
 cv::Mat PlotLineXY(const cv::Mat &x, const cv::Mat &series,
                    const Style &st, bool series_in_cols)
 {
-    /* ---- 校验横坐标 ---- */
+    /* ---- Validate the x axis ---- */
     cv::Mat xm = ToF64(x);
     if (xm.empty())
     {
-        /* 没给有效横坐标就退化成序号轴，至少还能出图 */
+        /* No valid x given, so fall back to the index axis and still produce a figure */
         return PlotLineImpl(nullptr, series, st, series_in_cols);
     }
 
     const std::vector<double> xv = Flatten(xm);
 
-    /* ---- 校验长度：横坐标必须覆盖采样点数 ---- */
+    /* ---- Validate the length: x must cover every sample ---- */
     cv::Mat sm = ToF64(series);
     if (sm.empty())
     {
@@ -1020,14 +1028,14 @@ cv::Mat PlotLineXY(const cv::Mat &x, const cv::Mat &series,
 
     if (xv.size() < npts)
     {
-        return Finish(NewCanvas(st), st);      /* 长度不匹配：返回空白图 */
+        return Finish(NewCanvas(st), st);      /* Length mismatch: return a blank image */
     }
 
     return PlotLineImpl(&xv, series, st, series_in_cols);
 }
 
 /* ========================================================================== */
-/*                            均值 ± 标准差带折线                              */
+/*                        Mean +/- std band line plot                         */
 /* ========================================================================== */
 
 cv::Mat PlotLineBand(const cv::Mat &samples, const Style &st, double k_sigma)
@@ -1074,7 +1082,7 @@ cv::Mat PlotLineBand(const cv::Mat &samples, const Style &st, double k_sigma)
         double       var = sum2 / static_cast<double>(n) - mu * mu;
         if (var < 0.0)
         {
-            var = 0.0;                     /* 数值误差兜底 */
+            var = 0.0;                     /* Guard against numerical error */
         }
         const double sd = std::sqrt(var);
 
@@ -1130,7 +1138,7 @@ cv::Mat PlotLineBand(const cv::Mat &samples, const Style &st, double k_sigma)
 
     const cv::Scalar c0 = ColorAt(0);
 
-    /* ---- 1. 误差带（先画带，再画网格和线） ---- */
+    /* ---- 1. Error band (draw the band before the grid and the line) ---- */
     if (st.band_alpha > 0.0)
     {
         std::vector<cv::Point2d> poly;
@@ -1168,10 +1176,10 @@ cv::Mat PlotLineBand(const cv::Mat &samples, const Style &st, double k_sigma)
         }
     }
 
-    /* ---- 2. 网格/边框/刻度 ---- */
+    /* ---- 2. Grid / frame / ticks ---- */
     DrawGridAndFrame(pt, st, rx, ry, rw, rh, xlo, xhi, gmin, gmax);
 
-    /* ---- 3. 均值线 ---- */
+    /* ---- 3. Mean line ---- */
     {
         std::vector<cv::Point2d> run;
         auto flush = [&]() {
@@ -1194,15 +1202,15 @@ cv::Mat PlotLineBand(const cv::Mat &samples, const Style &st, double k_sigma)
         flush();
     }
 
-    /* ---- 4. 标注 ---- */
+    /* ---- 4. Annotations ---- */
     DrawTitle(pt, st, 0.5 * st.width);
 
     {
         std::vector<std::string> names;
         std::vector<cv::Scalar>  cols4;
 
-        /* 默认图例名必须用**纯 ASCII**：cv::putText 只支持 ASCII，
-         * 写 "±" / "σ" 会被渲染成 "??"（见 plot.h 的"中文标签的限制"）。 */
+        /* The default legend name must be **pure ASCII**: cv::putText only supports ASCII,
+         * so non-ASCII symbols render as "??" (see "Non-ASCII label limitation" in plot.h). */
         if (st.legend.empty())
         {
             char buf[64];
@@ -1224,7 +1232,7 @@ cv::Mat PlotLineBand(const cv::Mat &samples, const Style &st, double k_sigma)
 }
 
 /* ========================================================================== */
-/*                                  散点图                                     */
+/*                                Scatter plot                                */
 /* ========================================================================== */
 
 cv::Mat PlotScatter(const cv::Mat &xy, const Style &st, bool points_in_rows)
@@ -1235,7 +1243,7 @@ cv::Mat PlotScatter(const cv::Mat &xy, const Style &st, bool points_in_rows)
         return Finish(NewCanvas(st), st);
     }
 
-    /* 统一成 2×N */
+    /* Normalize to 2xN */
     cv::Mat t;
     if (points_in_rows)
     {
@@ -1330,7 +1338,7 @@ cv::Mat PlotScatter(const cv::Mat &xy, const Style &st, bool points_in_rows)
 }
 
 /* ========================================================================== */
-/*                                  柱状图                                     */
+/*                                  Bar chart                                 */
 /* ========================================================================== */
 
 cv::Mat PlotBar(const cv::Mat &values, const Style &st)
@@ -1347,7 +1355,7 @@ cv::Mat PlotBar(const cv::Mat &values, const Style &st)
         return Finish(NewCanvas(st), st);
     }
 
-    /* 一维输入 -> 一条序列，每根柱子自成一"组" */
+    /* 1-D input -> one series, each bar forming its own group */
     const bool   single   = (all.size() == 1U);
     const size_t series_n = all.size();
     const size_t group_n  = all[0].size();
@@ -1357,7 +1365,7 @@ cv::Mat PlotBar(const cv::Mat &values, const Style &st)
         return Finish(NewCanvas(st), st);
     }
 
-    /* ---- 值域（柱状图强制包含 0） ---- */
+    /* ---- Value range (bar charts always include 0) ---- */
     double ylo = 0.0;
     double yhi = 0.0;
     MinMax(all, ylo, yhi);
@@ -1380,7 +1388,7 @@ cv::Mat PlotBar(const cv::Mat &values, const Style &st)
     LinearAxis ay;
     ay.lo = ylo; ay.hi = yhi; ay.p0 = ry + rh; ay.p1 = ry;
 
-    /* ---- 网格 + 边框 + y 刻度（x 轴按"组"离散处理，稍后手画） ---- */
+    /* ---- Grid + frame + y ticks (x is discrete by group, drawn by hand below) ---- */
     {
         const bool auto_ystep = (st.y_tick_step <= 0.0);
         double sy = 0.0;
@@ -1418,7 +1426,7 @@ cv::Mat PlotBar(const cv::Mat &values, const Style &st)
         }
     }
 
-    /* ---- 柱子 ---- */
+    /* ---- Bars ---- */
     const double slot  = rw / static_cast<double>(group_n);
     const double inner = slot * st.bar_fill_ratio;
     const double bw    = single ? inner : inner / static_cast<double>(series_n);
@@ -1463,7 +1471,7 @@ cv::Mat PlotBar(const cv::Mat &values, const Style &st)
             }
         }
 
-        /* 组标签：legend 在这里被当作"组名"使用 */
+        /* Group label: legend holds group names here */
         const std::string gl = (g < st.legend.size() && !st.legend[g].empty())
             ? st.legend[g]
             : NumToStr(static_cast<double>(g), 0);
@@ -1474,7 +1482,7 @@ cv::Mat PlotBar(const cv::Mat &values, const Style &st)
 
     DrawTitle(pt, st, 0.5 * st.width);
 
-    /* 分组柱状图的系列图例自动生成 S1/S2…（legend 已被组名占用） */
+    /* Grouped bars get auto-generated series legends S1/S2... (legend holds group names) */
     if (!single)
     {
         std::vector<std::string> names;
@@ -1493,7 +1501,7 @@ cv::Mat PlotBar(const cv::Mat &values, const Style &st)
 }
 
 /* ========================================================================== */
-/*                                  雷达图                                     */
+/*                                 Radar chart                                */
 /* ========================================================================== */
 
 cv::Mat PlotRadar(const cv::Mat &values, const Style &st,
@@ -1514,10 +1522,10 @@ cv::Mat PlotRadar(const cv::Mat &values, const Style &st,
     const size_t axes = all[0].size();
     if (axes < 3U)
     {
-        return Finish(NewCanvas(st), st);   /* 少于 3 个轴无法构成多边形 */
+        return Finish(NewCanvas(st), st);   /* Fewer than 3 axes cannot form a polygon */
     }
 
-    /* ---- 每轴满量程 ---- */
+    /* ---- Full scale per axis ---- */
     std::vector<double> scale(axes, 0.0);
     for (size_t a = 0; a < axes; ++a)
     {
@@ -1538,18 +1546,18 @@ cv::Mat PlotRadar(const cv::Mat &values, const Style &st,
     const double cx = 0.5 * st.width;
     const double cy = 0.5 * st.height + st.margin_top * 0.25;
 
-    /* 半径按 min(w,h) 计算以保持正圆，并留出轴标签的空间 */
+    /* Radius from min(w,h) keeps a true circle and leaves room for the axis labels */
     const double R = std::min(st.width, st.height) * 0.5 -
                      std::max(48.0, std::min(st.width, st.height) * 0.16);
 
     const double pi = 3.14159265358979323846;
 
-    /* 轴 0 在正上方，顺时针均匀分布 */
+    /* Axis 0 points up; the rest are distributed clockwise */
     auto angle = [&](size_t a) {
         return -pi * 0.5 + 2.0 * pi * static_cast<double>(a) / static_cast<double>(axes);
     };
 
-    /* ---- 网格环 ---- */
+    /* ---- Grid rings ---- */
     const int rings = std::max(1, st.radar_rings);
 
     for (int k = 1; k <= rings; ++k)
@@ -1565,14 +1573,14 @@ cv::Mat PlotRadar(const cv::Mat &values, const Style &st,
         pt.Polyline(ring, st.grid_color, 1.1);
     }
 
-    /* ---- 辐射轴 ---- */
+    /* ---- Radial axes ---- */
     for (size_t a = 0; a < axes; ++a)
     {
         const double t = angle(a);
         pt.Line(cx, cy, cx + R * std::cos(t), cy + R * std::sin(t), st.grid_color, 1.1);
     }
 
-    /* ---- 各序列多边形 ---- */
+    /* ---- Polygons of each series ---- */
     for (size_t s = 0; s < all.size(); ++s)
     {
         const cv::Scalar color = ColorAt(static_cast<int>(s));
@@ -1596,7 +1604,7 @@ cv::Mat PlotRadar(const cv::Mat &values, const Style &st,
             continue;
         }
 
-        /* 填充（半透明） */
+        /* Fill (translucent) */
         if (st.radar_fill_alpha > 0.0)
         {
             cv::Mat overlay = canvas.clone();
@@ -1606,19 +1614,19 @@ cv::Mat PlotRadar(const cv::Mat &values, const Style &st,
                             1.0 - st.radar_fill_alpha, 0.0, canvas);
         }
 
-        /* 轮廓 */
+        /* Outline */
         std::vector<cv::Point2d> closed = poly;
         closed.push_back(poly.front());
         pt.Polyline(closed, color, st.line_width + 0.4);
 
-        /* 顶点标记 */
+        /* Vertex markers */
         for (const auto &p : poly)
         {
             pt.Dot(p.x, p.y, st.marker_radius, color);
         }
     }
 
-    /* ---- 轴标签（按象限选择对齐方向，避免压住图形） ---- */
+    /* ---- Axis labels (alignment per quadrant so they never cover the chart) ---- */
     for (size_t a = 0; a < axes; ++a)
     {
         const double t  = angle(a);
@@ -1644,7 +1652,7 @@ cv::Mat PlotRadar(const cv::Mat &values, const Style &st,
 
     DrawTitle(pt, st, 0.5 * st.width);
 
-    /* ---- 图例（放到图底部，避免压住雷达） ---- */
+    /* ---- Legend (below the chart so it does not cover the radar) ---- */
     if (!st.legend.empty())
     {
         std::vector<std::string> names;
@@ -1666,7 +1674,7 @@ cv::Mat PlotRadar(const cv::Mat &values, const Style &st,
 }
 
 /* ========================================================================== */
-/*                                 伪彩色图                                    */
+/*                              Pseudo-color map                              */
 /* ========================================================================== */
 
 cv::Mat PlotPseudoColor(const cv::Mat &data, const Style &st,
@@ -1678,7 +1686,7 @@ cv::Mat PlotPseudoColor(const cv::Mat &data, const Style &st,
         return Finish(NewCanvas(st), st);
     }
 
-    /* ---- 归一化（跳过 NaN） ---- */
+    /* ---- Normalize (skip NaN) ---- */
     double lo = std::numeric_limits<double>::max();
     double hi = std::numeric_limits<double>::lowest();
 
@@ -1702,7 +1710,7 @@ cv::Mat PlotPseudoColor(const cv::Mat &data, const Style &st,
         hi = 1.0;
     }
 
-    /* 需要固定色标量程时：auto_y = false + y_min/y_max（这里当作 vmin/vmax） */
+    /* For a fixed color scale: auto_y = false + y_min/y_max (used as vmin/vmax here) */
     if (!st.auto_y && st.y_max > st.y_min)
     {
         lo = st.y_min;
@@ -1736,16 +1744,16 @@ cv::Mat PlotPseudoColor(const cv::Mat &data, const Style &st,
     cv::Mat color;
     cv::applyColorMap(idx, color, colormap);
 
-    /* NaN 画白色，便于和"最小值"区分 */
+    /* Paint NaN white so it is distinguishable from the minimum */
     color.setTo(cv::Scalar(255, 255, 255), nanmask);
 
-    /* ---- 画布与布局 ---- */
+    /* ---- Canvas and layout ---- */
     cv::Mat canvas = NewCanvas(st);
     Painter pt(canvas, std::max(1, st.supersample), st.text_renderer);
 
     const double barw      = (colorbar && st.colorbar_width > 0) ? st.colorbar_width : 0.0;
     const double bar_gap   = (barw > 0.0) ? 12.0 : 0.0;
-    const double bar_ticks = (barw > 0.0) ? 62.0 : 0.0;   /* 色条右侧刻度文字的宽度 */
+    const double bar_ticks = (barw > 0.0) ? 62.0 : 0.0;   /* Width of the tick text right of the colorbar */
 
     const double rx = st.margin_left;
     const double ry = st.margin_top;
@@ -1754,10 +1762,10 @@ cv::Mat PlotPseudoColor(const cv::Mat &data, const Style &st,
 
     if (rw < 40.0 || rh < 40.0)
     {
-        return Finish(canvas, st);   /* 画布太小，画不出有效区域 */
+        return Finish(canvas, st);   /* Canvas too small for a usable plot area */
     }
 
-    /* ---- 把彩色图缩放贴到绘图区 ---- */
+    /* ---- Scale the color map into the plot area ---- */
     {
         cv::Mat scaled;
         cv::resize(color, scaled,
@@ -1768,7 +1776,7 @@ cv::Mat PlotPseudoColor(const cv::Mat &data, const Style &st,
         const cv::Point tl = pt.P(rx, ry);
         scaled.copyTo(pt.Canvas()(cv::Rect(tl.x, tl.y, scaled.cols, scaled.rows)));
 
-        /* 格子网格（矩阵较小时才有意义） */
+        /* Cell grid (only meaningful for small matrices) */
         if (st.heatmap_grid && m.rows <= 40 && m.cols <= 40)
         {
             for (int r = 1; r < m.rows; ++r)
@@ -1786,7 +1794,7 @@ cv::Mat PlotPseudoColor(const cv::Mat &data, const Style &st,
         pt.Rect(rx, ry, rw, rh, st.frame_color, 1.2);
     }
 
-    /* ---- 坐标轴刻度（用矩阵索引） ---- */
+    /* ---- Axis ticks (using matrix indices) ---- */
     {
         double sx = 0.0;
         double sy = 0.0;
@@ -1813,14 +1821,15 @@ cv::Mat PlotPseudoColor(const cv::Mat &data, const Style &st,
         }
     }
 
-    /* ---- 色条 ---- */
+    /* ---- Colorbar ---- */
     if (barw > 0.0)
     {
         const double bx = rx + rw + bar_gap;
 
-        /* 色条直接从"竖排 256 阶"生成：第 0 行放最低值，保证低值在下。
-         * 注意**不能**先生成横排再 cv::rotate —— rotate 会交换宽高，
-         * 随后的 ROI 尺寸就和 (barw, rh) 对不上了（会触发 Mat ROI 断言）。 */
+        /* Build the colorbar directly as a vertical 256-step ramp, with row 0 holding the
+         * lowest value so low values stay at the bottom. Do **not** build a horizontal ramp
+         * and call cv::rotate: rotate swaps width and height, so the following ROI size no
+         * longer matches (barw, rh) and the Mat ROI assertion fires. */
         cv::Mat ramp(256, 1, CV_8UC1);
         for (int i = 0; i < 256; ++i)
         {
@@ -1855,7 +1864,7 @@ cv::Mat PlotPseudoColor(const cv::Mat &data, const Style &st,
         }
     }
 
-    /* ---- 标题与轴标签 ---- */
+    /* ---- Title and axis labels ---- */
     DrawTitle(pt, st, 0.5 * st.width);
 
     if (!st.xlabel.empty())
@@ -1865,7 +1874,8 @@ cv::Mat PlotPseudoColor(const cv::Mat &data, const Style &st,
     }
     if (!st.ylabel.empty())
     {
-        /* 伪彩色图的 y 标签横排放在绘图区上方，避免旋转文字与刻度重叠 */
+        /* The y label of a pseudo-color map is drawn horizontally above the plot area so it
+         * never overlaps the rotated tick labels */
         pt.Text(st.ylabel, rx, ry - 12.0, st.font_scale * 0.95,
                 st.foreground, Align::Center, VAlign::Bottom);
     }
@@ -1874,7 +1884,7 @@ cv::Mat PlotPseudoColor(const cv::Mat &data, const Style &st,
 }
 
 /* ========================================================================== */
-/*                                多子图拼接                                   */
+/*                              Subplot tiling                                */
 /* ========================================================================== */
 
 cv::Mat TileFigures(const std::vector<cv::Mat> &figs,
@@ -1923,7 +1933,7 @@ cv::Mat TileFigures(const std::vector<cv::Mat> &figs,
             continue;
         }
 
-        /* 等比缩放到格子内 */
+        /* Scale proportionally into the cell */
         const double s = std::min(static_cast<double>(cell_w) / fig.cols,
                                   static_cast<double>(cell_h) / fig.rows);
         cv::Mat scaled;
@@ -1953,7 +1963,7 @@ cv::Mat TileFigures(const std::vector<cv::Mat> &figs,
 }
 
 /* ========================================================================== */
-/*                                  保存图片                                   */
+/*                               Saving figures                               */
 /* ========================================================================== */
 
 bool Save(const cv::Mat &img, const std::string &path)

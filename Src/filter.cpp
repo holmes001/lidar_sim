@@ -1,6 +1,6 @@
 /**
  * @file    filter.cpp
- * @brief   匹配滤波实现
+ * @brief   Matched filter implementation
  */
 #include "filter.h"
 
@@ -8,12 +8,12 @@
 #include <cstddef>
 
 /**
- * @brief 匹配滤波：y = signal ⊛ h，h[k] = conj(ref[M-1-k])
- * @param signal                输入复信号
- * @param ref                   参考模板
- * @param mode                  输出长度与对齐方式
- * @param normalizeByRefEnergy  为 true 时按 ref 总能量归一化
- * @return 滤波后的复信号；任一输入为空时返回空
+ * @brief Matched filter: y = signal conv h, with h[k] = conj(ref[M-1-k])
+ * @param signal                Input complex signal
+ * @param ref                   Reference template
+ * @param mode                  Output length and alignment
+ * @param normalizeByRefEnergy  If true, normalize by the total energy of ref
+ * @return Filtered complex signal; empty if either input is empty
  */
 ComplexVec matchedFilter(const ComplexVec& signal,
                          const ComplexVec& ref,
@@ -24,16 +24,16 @@ ComplexVec matchedFilter(const ComplexVec& signal,
     const std::size_t M = ref.size();
     if (N == 0 || M == 0) return {};
 
-    /// 直接时域卷积：y_full[n] = Σ_k signal[k]·conj(ref[M-1-(n-k)])
+    /// Direct time-domain convolution: y_full[n] = sum_k signal[k]*conj(ref[M-1-(n-k)])
     ComplexVec full(N + M - 1, Complex(0.0, 0.0));
     for (std::size_t n = 0; n < N; ++n) {
         const Complex xn = signal[n];
-        if (xn == Complex(0.0, 0.0)) continue;          ///< 稀疏信号优化
+        if (xn == Complex(0.0, 0.0)) continue;          ///< Sparse-signal fast path
         for (std::size_t k = 0; k < M; ++k)
             full[n + k] += xn * std::conj(ref[M - 1 - k]);
     }
 
-    /// 可选归一化：按参考信号总能量缩放，完全匹配时峰值 = 1
+    /// Optional normalization: scale by the reference energy so a perfect match peaks at 1
     if (normalizeByRefEnergy) {
         double e = 0.0;
         for (const auto& c : ref) e += std::norm(c);
@@ -48,7 +48,7 @@ ComplexVec matchedFilter(const ComplexVec& signal,
         return full;
 
     case MatchFilterMode::Same: {
-        /// 取 full[M-1 : M-1+N]，索引 t 对应信号从 t 起与 ref 匹配
+        /// Take full[M-1 : M-1+N]; index t means the signal is matched starting at t
         ComplexVec out(N);
         std::copy(full.begin() + (M - 1),
                   full.begin() + (M - 1 + N),
@@ -57,7 +57,7 @@ ComplexVec matchedFilter(const ComplexVec& signal,
     }
 
     case MatchFilterMode::Valid: {
-        if (N < M) return {};                          ///< 无完全重叠区
+        if (N < M) return {};                          ///< No full-overlap region
         const std::size_t L = N - M + 1;
         ComplexVec out(L);
         std::copy(full.begin() + (M - 1),

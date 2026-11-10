@@ -17,8 +17,8 @@ ComplexVec2D rangeDopplerMap(const ComplexVec2D& slow_time)
     const std::size_t n_range = slow_time[0].size();
     if (n_pulse == 0 || n_range == 0) return ComplexVec2D();
 
-    /// 按列优先重排：同一距离门的 N 个慢时间样点连续存放，
-    /// 这样一次批量规划就能算完所有距离门。
+    /// Reorder column-major: the N slow-time samples of one range bin are stored
+    /// contiguously, so a single batched plan handles every range bin.
     fftw_complex* buf = fftw_alloc_complex(n_pulse * n_range);
     if (!buf) return ComplexVec2D();
 
@@ -39,7 +39,7 @@ ComplexVec2D rangeDopplerMap(const ComplexVec2D& slow_time)
                                         FFTW_FORWARD, FFTW_ESTIMATE);
     fftw_execute(plan);
 
-    /// 顺带做 fftShift：行号 k 取原始 bin (k + N/2) % N，中心行即 0 Hz
+    /// Also apply fftShift: row k takes raw bin (k + N/2) % N, so the center row is 0 Hz
     ComplexVec2D rd(n_pulse, ComplexVec(n_range));
     const std::size_t half = n_pulse / 2;
     for (std::size_t r = 0; r < n_range; ++r) {
@@ -93,7 +93,7 @@ RangeDopplerPeak findRangeDopplerPeak(const ComplexVec2D& rd,
     const std::size_t n_pulse = rd.size();
     const std::size_t n_range = rd[0].size();
 
-    /// 1) 整数栅格上的最大值
+    /// 1) Maximum on the integer grid
     for (std::size_t k = 0; k < n_pulse; ++k) {
         for (std::size_t r = 0; r < n_range; ++r) {
             const double p = std::norm(rd[k][r]);
@@ -105,7 +105,7 @@ RangeDopplerPeak findRangeDopplerPeak(const ComplexVec2D& rd,
         }
     }
 
-    /// 2) 多普勒方向做三点抛物线插值，得到亚栅格峰值
+    /// 2) Three-point parabolic interpolation along Doppler for a sub-bin peak
     const std::size_t k0 = peak.doppler_index;
     double delta = 0.0;
     if (k0 > 0 && k0 + 1 < n_pulse) {
@@ -117,7 +117,7 @@ RangeDopplerPeak findRangeDopplerPeak(const ComplexVec2D& rd,
         delta = std::max(-1.0, std::min(1.0, delta));
     }
 
-    /// 3) 行号 -> 物理量
+    /// 3) Row index -> physical quantities
     const double df = (n_pulse > 1 && pri > 0.0)
                     ? 1.0 / (static_cast<double>(n_pulse) * pri) : 0.0;
     const double bin = static_cast<double>(k0) + delta

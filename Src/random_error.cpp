@@ -1,6 +1,6 @@
 /**
  * @file    random_error.cpp
- * @brief   高斯噪声注入实现
+ * @brief   Gaussian noise injection implementation
  */
 #include "random_error.h"
 
@@ -13,9 +13,9 @@
 #include <string>
 
 /**
- * @brief 按总能量注入复高斯噪声（旧接口）
- * @deprecated 噪声按整段信号总能量归一化（见 energyZ），改变采样点数 samp
- *             会改变实际 SNR。新代码请用 addGaussianNoiseStd。
+ * @brief Add complex Gaussian noise with a given total energy (legacy API)
+ * @deprecated Noise is normalized by the total energy of the record (see energyZ),
+ *             so changing samp changes the actual SNR. Use addGaussianNoiseStd.
  */
 ComplexVec addGaussianNoise(const ComplexVec& signal,
                                      double noiseEnergy,
@@ -30,10 +30,10 @@ ComplexVec addGaussianNoise(const ComplexVec& signal,
     if (n == 0 || noiseEnergy == 0.0)
         return out;
 
-    std::mt19937 rng(seed);                            ///< 随机数引擎
+    std::mt19937 rng(seed);                            ///< Random engine
     std::normal_distribution<double> stdNormal(0.0, 1.0);
 
-    /// 第一步：生成零均值标准正态噪声，并统计其能量
+    /// Step 1: generate zero-mean standard normal noise and measure its energy
     ComplexVec z(n);
     double energyZ = 0.0;
     for (std::size_t i = 0; i < n; ++i) {
@@ -41,11 +41,11 @@ ComplexVec addGaussianNoise(const ComplexVec& signal,
         energyZ += std::abs(z[i]) * std::abs(z[i]) ;
     }
 
-    /// 防御性处理：n 个连续随机变量同时为 0 的概率为 0
+    /// Defensive check: the probability of n consecutive zeros is 0
     if (energyZ <= 0.0)
         return out;
 
-    /// 第二步：缩放到目标能量，再叠加均值偏移
+    /// Step 2: scale to the target energy, then add the mean offset
     const double scale = std::sqrt(noiseEnergy / energyZ);
     for (std::size_t i = 0; i < n; ++i)
         out[i] += scale * z[i] + mean;
@@ -54,12 +54,12 @@ ComplexVec addGaussianNoise(const ComplexVec& signal,
 }
 
 /**
- * @brief 按标准差注入圆对称复高斯噪声
- * @param signal 输入信号
- * @param stddev 每个 I/Q 分量的标准差
- * @param mean   均值，只加在实部
- * @param seed   随机种子
- * @return 叠加噪声后的信号
+ * @brief Add circularly symmetric complex Gaussian noise with a given stddev
+ * @param signal Input signal
+ * @param stddev Standard deviation of each I/Q component
+ * @param mean   Mean, applied to the real part only
+ * @param seed   Random seed
+ * @return Signal with noise added
  */
 ComplexVec addGaussianNoiseStd(const ComplexVec& signal,
                                         double stddev,
@@ -75,7 +75,7 @@ ComplexVec addGaussianNoiseStd(const ComplexVec& signal,
 
     std::mt19937 rng(seed);
     std::normal_distribution<double> dist(0.0, stddev);
-    /// 实部与虚部各自独立抽样，才是圆对称复高斯；mean 只加在实部
+    /// Independent draws for real and imaginary parts give circular symmetry; mean goes to the real part only
     for (auto& v : out) v += Complex(dist(rng) + mean, dist(rng));
     return out;
 }

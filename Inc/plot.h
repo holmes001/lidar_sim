@@ -1,37 +1,40 @@
 /**
  * @file    plot.h
- * @brief   基于 OpenCV 的论文插图绘制库（**声明**；实现见 Src/plot.cpp）
+ * @brief   OpenCV-based publication figure library (**declarations**; see Src/plot.cpp)
  *
  * @details
- * 本模块提供一组**直接输出 cv::Mat 图像**的绘图函数，用于生成论文/报告里常见的
- * 统计图形。设计目标：
+ * This module provides plotting functions that draw **directly into a cv::Mat**,
+ * producing the statistical figures typically found in papers and reports. Goals:
  *
- *  1. **不依赖 highgui**：所有函数只往内存里的 `cv::Mat` 上画，不创建窗口，
- *     因此可以在服务器 / 批处理 / CI 里跑。
- *  2. **论文级抗锯齿**：内部按 `Style::supersample` 倍超采样绘制，最后用
- *     `cv::INTER_AREA` 降采样。OpenCV 的 `cv::line` 本身没有抗锯齿，
- *     这是让曲线不出现台阶的最有效手段（默认 3 倍）。
- *  3. **输入统一为一维/二维数组**：所有接口都接受 `cv::Mat`（内部自动转换到
- *     `CV_64F`），也提供 `Make1D()` / `Make2D()` 方便从 `std::vector` 构造。
- *     一维表示单条序列，二维表示多条序列（默认**每行一条序列**）。
- *  4. **声明与实现分离**：本头文件只包含声明，实现在 `Src/plot.cpp`。
- *     头文件仅依赖 `opencv2/core.hpp` 与 `opencv2/imgproc.hpp`（后者只为
- *     `cv::COLORMAP_*` 的默认参数），**不拉 imgcodecs / highgui / videoio**，
- *     所以包含它的编译单元开销很小。
+ *  1. **No highgui dependency**: every function draws into an in-memory `cv::Mat`
+ *     and never opens a window, so it runs on servers, in batch jobs and in CI.
+ *  2. **Publication-grade anti-aliasing**: drawing happens at `Style::supersample`
+ *     times the target size and is then downsampled with `cv::INTER_AREA`.
+ *     OpenCV's `cv::line` has no anti-aliasing, so this is the most effective way
+ *     to keep curves free of stair steps (default 3x).
+ *  3. **Uniform 1-D / 2-D input**: every entry point accepts `cv::Mat` (converted
+ *     internally to `CV_64F`), and `Make1D()` / `Make2D()` build one from a
+ *     `std::vector`. 1-D means one series, 2-D means several series (by default
+ *     **one series per row**).
+ *  4. **Declaration/implementation split**: this header declares only; the
+ *     implementation is in `Src/plot.cpp`. The header depends only on
+ *     `opencv2/core.hpp` and `opencv2/imgproc.hpp` (the latter only for the
+ *     `cv::COLORMAP_*` defaults) and does **not** pull in imgcodecs / highgui /
+ *     videoio, so translation units including it stay cheap.
  *
- * @section supported_charts 支持的图形
+ * @section supported_charts Supported charts
  *
- * | 函数 | 图形 | 论文里的典型用途 |
+ * | Function | Chart | Typical use in a paper |
  * |---|---|---|
- * | `PlotLine()`        | 折线图 | 时域波形、收敛曲线、多方法对比 |
- * | `PlotLineBand()`    | 均值±标准差带折线 | 多次重复实验的统计结果（阴影带） |
- * | `PlotScatter()`     | 散点图 | 实测值 vs 理论值、相关性 |
- * | `PlotBar()`         | 柱状图（可分组） | 各方案指标对比、消融实验 |
- * | `PlotRadar()`       | 雷达图（多组多边形） | 多指标综合评价 |
- * | `PlotPseudoColor()` | 伪彩色图（含色条） | 二维场分布（光强、误差、代价函数） |
- * | `TileFigures()`     | 多子图拼接 | 组合成 (a)(b)(c) 子图 |
+ * | `PlotLine()`        | Line plot | Time-domain waveforms, convergence curves, comparisons |
+ * | `PlotLineBand()`    | Mean +/- std band | Statistics over repeated experiments (shaded band) |
+ * | `PlotScatter()`     | Scatter plot | Measured vs theoretical values, correlation |
+ * | `PlotBar()`         | Bar chart (grouped) | Metric comparison across schemes, ablation |
+ * | `PlotRadar()`       | Radar chart (multiple polygons) | Multi-metric evaluation |
+ * | `PlotPseudoColor()` | Pseudo-color map (with colorbar) | 2-D fields (intensity, error, cost) |
+ * | `TileFigures()`     | Subplot tiling | Combining (a)(b)(c) subfigures |
  *
- * @section usage 典型用法
+ * @section usage Typical usage
  *
  * @code
  * #include "plot.h"
@@ -40,10 +43,10 @@
  * {
  *     using namespace lidar::plot;
  *
- *     // ---- 折线图：两条曲线 ----
+ *     // ---- Line plot: two curves ----
  *     std::vector<std::vector<double>> data = {
- *         {0.0, 0.8, 0.9, 0.95, 0.99},     // 第 1 条
- *         {0.0, 0.5, 0.7, 0.80, 0.85}      // 第 2 条
+ *         {0.0, 0.8, 0.9, 0.95, 0.99},     // series 1
+ *         {0.0, 0.5, 0.7, 0.80, 0.85}      // series 2
  *     };
  *     Style st;
  *     st.title  = "Convergence";
@@ -53,8 +56,8 @@
  *     cv::Mat fig = PlotLine(Make2D(data), st);
  *     Save(fig, "convergence.png");
  *
- *     // ---- 伪彩色图：二维场 ----
- *     cv::Mat field = ...;                       // CV_64F，M×N
+ *     // ---- Pseudo-color map: 2-D field ----
+ *     cv::Mat field = ...;                       // CV_64F, M x N
  *     Style st2;
  *     st2.title  = "Intensity";
  *     st2.xlabel = "x [pixel]";
@@ -63,29 +66,31 @@
  * }
  * @endcode
  *
- * @warning **中文标签的限制**
- * `cv::putText()` 用的是 Hershey 矢量字体，**只支持 ASCII 可见字符**，中文（以及
- * `±` / `σ` 这类非 ASCII 符号）会渲染成 `???`。如果插图需要中文标注：
- *   1. 标题/坐标轴标签用英文（论文正文本来就常用英文，推荐）；
- *   2. 给 `Style::text_renderer` 传一个自定义渲染回调（例如用 FreeType 加载
- *      `simhei.ttf` / `SourceHanSansSC.otf` 绘制），本库会把**所有**文字绘制
- *      都转交给该回调。注意回调负责按 `font_scale` 自行缩放字号。
+ * @warning **Non-ASCII label limitation**
+ * `cv::putText()` uses the Hershey vector fonts, which support **only visible
+ * ASCII**; CJK characters (and non-ASCII symbols) render as `???`. If a figure
+ * needs CJK labels:
+ *   1. Use English for titles and axis labels (recommended; papers usually do);
+ *   2. Pass a custom render callback to `Style::text_renderer` (e.g. draw with
+ *      FreeType and a CJK font such as `SourceHanSansSC.otf`). The library routes
+ *      **all** text drawing through that callback, which must scale the font size
+ *      by `font_scale` itself.
  *
- * @warning 本库假定输入数据里 **NaN / Inf 表示"缺失点"**：折线会在该点断开
- *          （不会连一条穿越过去的直线），统计类函数会跳过该点，
- *          伪彩色图把它画成白色。
+ * @warning This library assumes **NaN / Inf marks a missing point**: lines break
+ *          there (no straight segment across the gap), statistical functions skip
+ *          such points, and pseudo-color maps paint them white.
  *
- * @note 构建：把 `Src/plot.cpp` 加入编译目标即可。若使用本仓库的 CMakeLists，
- *       其中的 `GLOB_RECURSE` 会自动把 `Src` 下所有 cpp 源文件包含进来。
+ * @note Build: add `Src/plot.cpp` to the compile target. With this repository's
+ *       CMakeLists, `GLOB_RECURSE` pulls in every cpp under `Src` automatically.
  *
- * @note 授权：随工程使用，无附加限制。
+ * @note License: free to use within this project, no additional restrictions.
  */
 
 #ifndef LIDAR_PLOT_H
 #define LIDAR_PLOT_H
 
 #include <opencv2/core.hpp>
-#include <opencv2/imgproc.hpp>   /* 仅为 cv::COLORMAP_* 的默认参数 */
+#include <opencv2/imgproc.hpp>   /* only for the cv::COLORMAP_* defaults */
 
 #include <functional>
 #include <string>
@@ -97,39 +102,39 @@ namespace plot
 {
 
 /* ========================================================================== */
-/*                                  枚举与别名                                 */
+/*                              Enums and aliases                             */
 /* ========================================================================== */
 
 /**
- * @brief 水平对齐方式（用于文字/图例定位）
+ * @brief Horizontal alignment (for text/legend placement)
  */
 enum class Align
 {
-    Left = 0,   /**< 文字左边缘对齐到给定 x */
-    Center,     /**< 文字水平居中于给定 x */
-    Right       /**< 文字右边缘对齐到给定 x */
+    Left = 0,   /**< Left edge of the text aligns to the given x */
+    Center,     /**< Text is horizontally centered on the given x */
+    Right       /**< Right edge of the text aligns to the given x */
 };
 
 /**
- * @brief 垂直对齐方式（用于文字/图例定位）
+ * @brief Vertical alignment (for text/legend placement)
  */
 enum class VAlign
 {
-    Top = 0,    /**< 文字顶部对齐到给定 y */
-    Middle,     /**< 文字垂直居中于给定 y */
-    Bottom      /**< 文字基线/底部对齐到给定 y */
+    Top = 0,    /**< Top of the text aligns to the given y */
+    Middle,     /**< Text is vertically centered on the given y */
+    Bottom      /**< Text baseline/bottom aligns to the given y */
 };
 
 /**
- * @brief 自定义文字渲染回调
- * @param img        目标图像（内部是已超采样的画布，坐标已是像素）
- * @param text       要绘制的文本（UTF-8）
- * @param org        **左下角基线**起点（与 cv::putText 的 org 语义一致）
- * @param font_scale 字号缩放系数（已按超采样倍数放大）
- * @param color      颜色（BGR）
- * @param thickness  线宽（已按超采样倍数放大）
- * @note 传入 nullptr（默认）时使用 `cv::putText` + `FONT_HERSHEY_SIMPLEX`。
- * @see 文件头的"中文标签的限制"一节。
+ * @brief Custom text rendering callback
+ * @param img        Target image (already supersampled; coordinates are pixels)
+ * @param text       Text to draw (UTF-8)
+ * @param org        **Bottom-left baseline** origin (same meaning as cv::putText)
+ * @param font_scale Font scale (already multiplied by the supersample factor)
+ * @param color      Color (BGR)
+ * @param thickness  Line thickness (already multiplied by the supersample factor)
+ * @note Passing nullptr (default) uses `cv::putText` + `FONT_HERSHEY_SIMPLEX`.
+ * @see The "Non-ASCII label limitation" section at the top of this file.
  */
 using TextRenderer = std::function<void(cv::Mat &img,
                                         const std::string &text,
@@ -139,208 +144,213 @@ using TextRenderer = std::function<void(cv::Mat &img,
                                         int thickness)>;
 
 /* ========================================================================== */
-/*                                  样式配置                                   */
+/*                                  Style                                     */
 /* ========================================================================== */
 
 /**
- * @brief 图形样式与标注
+ * @brief Figure style and annotations
  *
- * @details 所有字段都有合理默认值，**只需要改你关心的那几个**。
- * 一次调用后不会被修改（绘图函数都按 const 引用接收），可以放心复用同一个 Style。
+ * @details Every field has a sensible default, so **only change what matters to you**.
+ * A call never modifies it (drawing functions take it by const reference), so the
+ * same Style can be reused freely.
  *
- * @note 尺寸相关的字段（`width`/`height`/`margin_*`）都是**逻辑像素**；
- *       内部会乘以 `supersample` 得到真实画布大小，输出图像始终是
- *       `width × height`。
+ * @note Size fields (`width`/`height`/`margin_*`) are **logical pixels**; they are
+ *       multiplied by `supersample` internally, and the output image is always
+ *       `width x height`.
  */
 struct Style
 {
-    /* ---- 画布与抗锯齿 ---- */
+    /* ---- Canvas and anti-aliasing ---- */
 
-    /** @brief 输出图像宽度（逻辑像素） */
+    /** @brief Output image width (logical pixels) */
     int width  = 900;
 
-    /** @brief 输出图像高度（逻辑像素） */
+    /** @brief Output image height (logical pixels) */
     int height = 600;
 
     /**
-     * @brief 超采样倍数：内部按 width*ss × height*ss 绘制，最后降采样
-     * @note 1 = 关闭（快，但有台阶）；3 = 论文级（默认）；4~6 = 极致，
-     *       代价是内存 O(ss²)。
+     * @brief Supersample factor: draw at width*ss x height*ss, then downsample
+     * @note 1 = off (fast but stair-stepped); 3 = publication grade (default);
+     *       4-6 = extreme, at a memory cost of O(ss^2).
      */
     int supersample = 3;
 
-    /* ---- 颜色（OpenCV 是 BGR 顺序！） ---- */
+    /* ---- Colors (OpenCV uses BGR order!) ---- */
 
-    /** @brief 背景色，默认白 */
+    /** @brief Background color, white by default */
     cv::Scalar background{255, 255, 255};
 
-    /** @brief 前景色（坐标轴、刻度文字），默认黑 */
+    /** @brief Foreground color (axes, tick labels), black by default */
     cv::Scalar foreground{0, 0, 0};
 
-    /** @brief 网格线颜色，默认浅灰 */
+    /** @brief Grid line color, light gray by default */
     cv::Scalar grid_color{220, 220, 220};
 
-    /** @brief 绘图区边框颜色，默认黑 */
+    /** @brief Plot frame color, black by default */
     cv::Scalar frame_color{0, 0, 0};
 
-    /* ---- 边距（逻辑像素） ---- */
+    /* ---- Margins (logical pixels) ---- */
 
-    int margin_left   = 92;   /**< 左边距，放 y 轴刻度与标签 */
-    int margin_right  = 32;   /**< 右边距（伪彩色图会被自动留出空间给色条） */
-    int margin_top    = 56;   /**< 上边距，放标题 */
-    int margin_bottom = 74;   /**< 下边距，放 x 轴刻度与标签 */
+    int margin_left   = 92;   /**< Left margin, holds y ticks and label */
+    int margin_right  = 32;   /**< Right margin (pseudo-color maps reserve space for the colorbar) */
+    int margin_top    = 56;   /**< Top margin, holds the title */
+    int margin_bottom = 74;   /**< Bottom margin, holds x ticks and label */
 
-    /* ---- 字体与线宽 ---- */
+    /* ---- Font and line width ---- */
 
-    /** @brief 字号缩放（相对 Hershey 基准），刻度字会再乘 0.82 */
+    /** @brief Font scale (relative to the Hershey baseline); tick labels use 0.82x */
     double font_scale = 0.62;
 
-    /** @brief 线条粗细基准（逻辑像素） */
+    /** @brief Base line thickness (logical pixels) */
     int thickness = 2;
 
-    /** @brief 曲线线宽（逻辑像素，支持小数） */
+    /** @brief Curve line width (logical pixels, fractional allowed) */
     double line_width = 2.4;
 
-    /** @brief 刻度线长度（逻辑像素） */
+    /** @brief Tick length (logical pixels) */
     int tick_len = 7;
 
-    /* ---- 内容标注 ---- */
+    /* ---- Annotations ---- */
 
-    std::string title;      /**< 标题（空 = 不画） */
-    std::string xlabel;     /**< x 轴标签（空 = 不画） */
-    std::string ylabel;     /**< y 轴标签（空 = 不画；折线图会自动旋转 90°） */
+    std::string title;      /**< Title (empty = not drawn) */
+    std::string xlabel;     /**< x axis label (empty = not drawn) */
+    std::string ylabel;     /**< y axis label (empty = not drawn; auto-rotated 90 deg for line plots) */
 
-    /** @brief 图例文字，按序列顺序；空字符串项会被跳过 */
+    /** @brief Legend entries in series order; empty strings are skipped */
     std::vector<std::string> legend;
 
-    /** @brief 是否画网格 */
+    /** @brief Whether to draw the grid */
     bool grid = true;
 
-    /** @brief 图例位置：true = 绘图区右上角，false = 绘图区下方 */
+    /** @brief Legend position: true = top-right inside the plot, false = below it */
     bool legend_top_right = true;
 
-    /* ---- 数值轴控制 ---- */
+    /* ---- Numeric axis control ---- */
 
-    /** @brief x 轴下界（仅 `auto_x == false` 时生效） */
+    /** @brief x lower bound (used only when `auto_x == false`) */
     double x_min = 0.0;
 
-    /** @brief x 轴上界（仅 `auto_x == false` 时生效） */
+    /** @brief x upper bound (used only when `auto_x == false`) */
     double x_max = 0.0;
 
-    /** @brief true = 忽略 x_min/x_max，按数据自动定界 */
+    /** @brief true = ignore x_min/x_max and fit the data */
     bool auto_x = true;
 
-    /** @brief true = 按数据自动定界 y 轴 */
+    /** @brief true = fit the y axis to the data */
     bool auto_y = true;
 
-    /** @brief y 轴下界（仅 `auto_y == false` 时生效；伪彩色图用作 vmin） */
+    /** @brief y lower bound (used only when `auto_y == false`; vmin for pseudo-color) */
     double y_min = 0.0;
 
-    /** @brief y 轴上界（仅 `auto_y == false` 时生效；伪彩色图用作 vmax） */
+    /** @brief y upper bound (used only when `auto_y == false`; vmax for pseudo-color) */
     double y_max = 0.0;
 
-    /** @brief y 轴是否强制包含 0（柱状图内部默认包含） */
+    /** @brief Force the y axis to include 0 (bar charts always do) */
     bool y_include_zero = false;
 
-    /** @brief 自动定界时上下各留的余量比例（0.08 = 8%） */
+    /** @brief Padding ratio added at both ends when fitting (0.08 = 8%) */
     double y_pad_ratio = 0.08;
 
-    /** @brief 手动指定 x 刻度间隔；<= 0 表示按 "1-2-5" 规则自动选取 */
+    /** @brief Manual x tick step; <= 0 selects one by the "1-2-5" rule */
     double x_tick_step = 0.0;
 
-    /** @brief 手动指定 y 刻度间隔；<= 0 表示按 "1-2-5" 规则自动选取 */
+    /** @brief Manual y tick step; <= 0 selects one by the "1-2-5" rule */
     double y_tick_step = 0.0;
 
-    /** @brief 刻度显示的小数位数；< 0 表示用 "%.4g" 短格式自动处理 */
+    /** @brief Decimals shown on ticks; < 0 uses the short "%.4g" format */
     int decimals = -1;
 
-    /* ---- 散点 / 柱状图 ---- */
+    /* ---- Scatter / bar chart ---- */
 
-    /** @brief 散点标记半径（逻辑像素） */
+    /** @brief Scatter marker radius (logical pixels) */
     int marker_radius = 4;
 
-    /** @brief 是否在折线图的每个数据点画标记 */
+    /** @brief Draw a marker at every data point of a line plot */
     bool show_markers = false;
 
-    /** @brief 柱状图柱子宽度占组内空位的比例 (0, 1] */
+    /** @brief Bar width as a fraction of its slot (0, 1] */
     double bar_fill_ratio = 0.8;
 
-    /** @brief 柱状图是否在柱顶标数值 */
+    /** @brief Print the value on top of each bar */
     bool bar_value_labels = false;
 
-    /* ---- 雷达图 ---- */
+    /* ---- Radar chart ---- */
 
     /**
-     * @brief 雷达图各轴的统一最大值；<= 0 表示**每个轴各自**按该轴最大值归一化
-     * @note 若你的指标已经归一化到 [0,1]，直接留 0 即可。
+     * @brief Common maximum for all radar axes; <= 0 normalizes **each axis** by its
+     *        own maximum
+     * @note If your metrics are already normalized to [0,1], leave it at 0.
      */
     double radar_axis_max = 0.0;
 
-    /** @brief 雷达图网格环数 */
+    /** @brief Number of radar grid rings */
     int radar_rings = 5;
 
-    /** @brief 雷达图多边形填充透明度 [0,1]，0 = 不填充 */
+    /** @brief Radar polygon fill alpha [0,1]; 0 = no fill */
     double radar_fill_alpha = 0.25;
 
-    /* ---- 统计带 ---- */
+    /* ---- Statistical band ---- */
 
-    /** @brief 均值±标准差带的透明度 [0,1] */
+    /** @brief Alpha of the mean +/- std band [0,1] */
     double band_alpha = 0.32;
 
-    /* ---- 伪彩色图 ---- */
+    /* ---- Pseudo-color map ---- */
 
-    /** @brief 伪彩色色条宽度（逻辑像素）；0 = 不画色条 */
+    /** @brief Colorbar width (logical pixels); 0 = no colorbar */
     int colorbar_width = 26;
 
-    /** @brief 伪彩色图是否在格子上画细网格（仅当行列数 <= 40 时生效） */
+    /** @brief Draw thin cell borders (only when rows and cols are <= 40) */
     bool heatmap_grid = false;
 
-    /* ---- 扩展 ---- */
+    /* ---- Extension ---- */
 
-    /** @brief 自定义文字渲染器；nullptr = 用 cv::putText（仅 ASCII） */
+    /** @brief Custom text renderer; nullptr = cv::putText (ASCII only) */
     TextRenderer text_renderer = nullptr;
 };
 
 /* ========================================================================== */
-/*                              输入数据便捷构造                               */
+/*                          Input data helpers                                */
 /* ========================================================================== */
 
 /**
- * @brief 把一维 `std::vector` 转成绘图接口接受的列向量 `cv::Mat`（N×1, CV_64F）
- * @param v 数据
- * @return N×1 的 `CV_64F` 矩阵
+ * @brief Convert a 1-D `std::vector` into a column-vector `cv::Mat` (N x 1, CV_64F)
+ * @param v Data
+ * @return N x 1 `CV_64F` matrix
  */
 cv::Mat Make1D(const std::vector<double> &v);
 
 /**
- * @brief 把二维 `std::vector` 转成 `cv::Mat`（rows×cols, CV_64F）
- * @param v 二维数据，要求每行长度一致
- * @return rows×cols 的 `CV_64F` 矩阵
- * @throws std::invalid_argument 各行长度不一致时
+ * @brief Convert a 2-D `std::vector` into a `cv::Mat` (rows x cols, CV_64F)
+ * @param v 2-D data; every row must have the same length
+ * @return rows x cols `CV_64F` matrix
+ * @throws std::invalid_argument If the rows have different lengths
  */
 cv::Mat Make2D(const std::vector<std::vector<double>> &v);
 
 /* ========================================================================== */
-/*                                  折线图                                     */
+/*                                 Line plot                                  */
 /* ========================================================================== */
 
 /**
- * @brief 折线图（支持多条曲线、自动刻度、图例、网格）
+ * @brief Line plot (multiple curves, automatic ticks, legend, grid)
  *
- * @param series          一维或二维数组（内部自动转 `CV_64F`）
- *                        - **一维**（N×1 或 1×N）：一条曲线
- *                        - **二维**（M×N）：**每行一条曲线**（M 条、每条 N 点）
- * @param st              样式与标注
- * @param series_in_cols  true 时把二维输入的**每列**当作一条曲线
- * @return BGR 图像（尺寸 = `st.width × st.height`）
+ * @param series          1-D or 2-D array (converted internally to `CV_64F`)
+ *                        - **1-D** (N x 1 or 1 x N): one curve
+ *                        - **2-D** (M x N): **one curve per row** (M curves of N points)
+ * @param st              Style and annotations
+ * @param series_in_cols  If true, treat **each column** of a 2-D input as one curve
+ * @return BGR image (size = `st.width x st.height`)
  *
  * @details
- * - 横坐标默认取采样序号 0, 1, …, N-1；需要自定义横坐标时请用 @ref PlotScatter。
- * - **NaN / Inf 表示缺失点**：曲线在该处断开，不会连出穿过去的直线。
- * - y 轴自动定界时按 `st.y_pad_ratio` 上下留白；`st.y_include_zero` 可强制包含 0。
- * - 刻度按 "1-2-5 × 10ⁿ" 规则选取，可用 `st.x_tick_step` / `st.y_tick_step` 覆盖。
+ * - x defaults to the sample index 0, 1, ..., N-1; use @ref PlotLineXY for a custom x.
+ * - **NaN / Inf marks a missing point**: the curve breaks there instead of drawing
+ *   a straight segment across the gap.
+ * - When y is fitted automatically, `st.y_pad_ratio` adds padding on both ends;
+ *   `st.y_include_zero` forces 0 into range.
+ * - Ticks follow the "1-2-5 x 10^n" rule; override with `st.x_tick_step` /
+ *   `st.y_tick_step`.
  *
- * @par 示例
+ * @par Example
  * @code
  * Style st;
  * st.title  = "Trajectory Error";
@@ -353,30 +363,31 @@ cv::Mat Make2D(const std::vector<std::vector<double>> &v);
 cv::Mat PlotLine(const cv::Mat &series, const Style &st = Style(), bool series_in_cols = false);
 
 /* ========================================================================== */
-/*                            均值 ± 标准差带折线                              */
+/*                        Mean +/- std band line plot                         */
 /* ========================================================================== */
 
 /**
- * @brief 折线图 + 半透明误差带（`mean ± k·σ`）
+ * @brief Line plot with a translucent error band (`mean +/- k*sigma`)
  *
- * @param samples 二维数组，**每行是一次独立观测**，每列是同一采样位置
- *                （即 `rows = 重复实验次数`，`cols = 采样点数`）
- * @param st      样式与标注
- * @param k_sigma 误差带宽度，单位标准差（论文常用 1σ 或 2σ）
- * @return BGR 图像
+ * @param samples 2-D array, **one row per independent observation**, one column
+ *                per sample position (i.e. `rows = repeats`, `cols = samples`)
+ * @param st      Style and annotations
+ * @param k_sigma Band half-width in standard deviations (1 or 2 typically)
+ * @return BGR image
  *
- * @details 这是论文里表达"多次重复实验结果"的标准画法：实线画均值，
- *          阴影带画 ±kσ。带用 `st.band_alpha` 控制透明度，先画带再画线，
- *          保证曲线不被遮住。
+ * @details The standard way to show results of repeated experiments: a solid line
+ *          for the mean and a shaded band for +/-k sigma. `st.band_alpha` sets the
+ *          band transparency; the band is drawn before the line so the curve stays
+ *          visible.
  *
- * @note 每列的 NaN 会被**跳过**（不计入该列的均值和方差）。
- *       若某列有效样本为 0，该处曲线断开。
- * @note `st.legend[0]` 为空时自动生成图例名 `mean +/- k sigma`（纯 ASCII，
- *       避免 `±` / `σ` 被 cv::putText 渲染成 `??`）。
+ * @note NaN in a column is **skipped** (excluded from that column's mean and
+ *       variance). A column with no valid samples leaves a break in the curve.
+ * @note When `st.legend[0]` is empty, the legend entry is generated as
+ *       `mean +/- k sigma` (pure ASCII, so cv::putText does not render `??`).
  *
- * @par 示例
+ * @par Example
  * @code
- * cv::Mat samples(20, 100, CV_64F);   // 20 次实验 × 100 个采样点
+ * cv::Mat samples(20, 100, CV_64F);   // 20 runs x 100 samples
  * Style st;
  * st.title = "Position Error (mean +/- 1 sigma, N=20)";
  * Save(PlotLineBand(samples, st, 1.0), "band.png");
@@ -385,31 +396,34 @@ cv::Mat PlotLine(const cv::Mat &series, const Style &st = Style(), bool series_i
 cv::Mat PlotLineBand(const cv::Mat &samples, const Style &st = Style(), double k_sigma = 1.0);
 
 /* ========================================================================== */
-/*                          带显式横坐标的折线图                               */
+/*                      Line plot with explicit x axis                        */
 /* ========================================================================== */
 
 /**
- * @brief 折线图（**显式给定横坐标**，用于频率轴 / 距离轴等物理横轴）
+ * @brief Line plot with an **explicitly given x axis** (for frequency, range, etc.)
  *
- * @param x              横坐标，一维数组（N 或 N×1），长度须等于采样点数
- * @param series         纵坐标，一维或二维数组
- *                       - **一维**（N）：一条曲线
- *                       - **二维**（M×N）：每行一条曲线
- * @param st             样式与标注
- * @param series_in_cols true 时把二维输入的每列当作一条曲线
- * @return BGR 图像
+ * @param x              x axis, 1-D array (N or N x 1), length must match the samples
+ * @param series         y values, 1-D or 2-D array
+ *                       - **1-D** (N): one curve
+ *                       - **2-D** (M x N): one curve per row
+ * @param st             Style and annotations
+ * @param series_in_cols If true, treat each column of a 2-D input as one curve
+ * @return BGR image
  *
- * @details 与 @ref PlotLine 完全相同，唯一区别是**横坐标由调用方给定**而不是
- *          采样序号 0..N−1。凡是横轴有物理含义（频率、时间、距离、角度）的图
- *          都应该用它，否则刻度数字会和真实物理量对不上。
+ * @details Identical to @ref PlotLine except that **x is supplied by the caller**
+ *          instead of the sample index 0..N-1. Use it whenever the horizontal axis
+ *          has physical meaning (frequency, time, range, angle), otherwise the tick
+ *          numbers will not match the real quantity.
  *
- *          自动定界时 x 轴按 `min(x)`~`max(x)` 取，并按 "1-2-5" 规则选刻度；
- *          若 `st.auto_x == false`，仍以 `st.x_min` / `st.x_max` 为准。
+ *          When fitting automatically, x spans `min(x)`..`max(x)` and ticks follow
+ *          the "1-2-5" rule; when `st.auto_x == false`, `st.x_min` / `st.x_max` win.
  *
- * @note `x` 的长度与采样点数不一致时返回空白图（避免越界）。
- * @note `x` 允许非等间隔（例如对数频率轴），绘图时按给定顺序直接连线。
+ * @note If the length of `x` does not match the number of samples, a blank image is
+ *       returned (prevents out-of-bounds access).
+ * @note `x` may be non-uniformly spaced (e.g. a logarithmic frequency axis); points
+ *       are connected in the given order.
  *
- * @par 示例：画多普勒谱（横轴是真实频率）
+ * @par Example: plotting a Doppler spectrum (x is the real frequency)
  * @code
  * Style st;
  * st.xlabel = "Frequency (Hz)";
@@ -422,79 +436,84 @@ cv::Mat PlotLineXY(const cv::Mat &x, const cv::Mat &series,
                    const Style &st = Style(), bool series_in_cols = false);
 
 /* ========================================================================== */
-/*                                  散点图                                     */
+/*                                Scatter plot                                */
 /* ========================================================================== */
 
 /**
- * @brief 散点图（x-y 数据对）
+ * @brief Scatter plot (x-y data pairs)
  *
- * @param xy             二维数组，形状 **N×2**（每行一个点 `(x, y)`）或 **2×N**
- * @param st             样式与标注
- * @param points_in_rows true 表示 N×2（默认）；false 表示 2×N
- * @return BGR 图像
+ * @param xy             2-D array shaped **N x 2** (one `(x, y)` per row) or **2 x N**
+ * @param st             Style and annotations
+ * @param points_in_rows true = N x 2 (default); false = 2 x N
+ * @return BGR image
  *
- * @details 与 @ref PlotLine 的区别：这里的**横坐标是真实数据**，而不是采样序号。
- *          适合画"实测 vs 理论"、"相关性"这类图。若 `st.legend[0]` 非空，
- *          会作为散点系列的图例名。
+ * @details Unlike @ref PlotLine, **x here is real data** rather than a sample index.
+ *          Suited to "measured vs theoretical" or correlation plots. If
+ *          `st.legend[0]` is non-empty it names the scatter series.
  *
- * @note NaN 点会被跳过；坐标轴按有效点的范围自动定界并留白。
+ * @note NaN points are skipped; axes are fitted to the valid points with padding.
  */
 cv::Mat PlotScatter(const cv::Mat &xy, const Style &st = Style(), bool points_in_rows = true);
 
 /* ========================================================================== */
-/*                                  柱状图                                     */
+/*                                  Bar chart                                 */
 /* ========================================================================== */
 
 /**
- * @brief 柱状图（单系列或分组对比）
+ * @brief Bar chart (single series or grouped comparison)
  *
- * @param values 一维或二维数组
- *               - **一维**（N）：N 根柱子，每根自成一"组"
- *               - **二维**（M×N）：**每行一组**，每组 N 根柱子并排（M 个系列）
- * @param st     样式与标注
- * @return BGR 图像
+ * @param values 1-D or 2-D array
+ *               - **1-D** (N): N bars, each forming its own group
+ *               - **2-D** (M x N): **one group per row**, N bars side by side (M series)
+ * @param st     Style and annotations
+ * @return BGR image
  *
  * @details
- * - y 轴自动包含 0（柱状图从 0 起才有可比性）。
- * - 柱子宽度由 `st.bar_fill_ratio` 控制；分组时组内并排。
- * - `st.bar_value_labels = true` 可在柱顶标数值（矩阵较大时拥挤，慎用）。
- * - **x 轴刻度标签取 `st.legend` 里对应项**（组名）；为空则显示组序号。
- * - 分组柱状图的系列图例自动生成为 `S1`/`S2`…，因为 `legend` 已被组名占用。
+ * - The y axis always includes 0 (bars must start at 0 to be comparable).
+ * - Bar width is set by `st.bar_fill_ratio`; grouped bars sit side by side.
+ * - `st.bar_value_labels = true` prints values above the bars (crowded for large
+ *   matrices, use with care).
+ * - **x tick labels come from `st.legend`** (group names); empty entries fall back
+ *   to the group index.
+ * - Grouped charts generate series legend entries `S1`/`S2`... because `legend` is
+ *   already used for group names.
  *
- * @note 支持负值（柱子向下生长）。
+ * @note Negative values are supported (bars grow downwards).
  */
 cv::Mat PlotBar(const cv::Mat &values, const Style &st = Style());
 
 /* ========================================================================== */
-/*                                  雷达图                                     */
+/*                                 Radar chart                                */
 /* ========================================================================== */
 
 /**
- * @brief 雷达图 / 蜘蛛网图（多指标综合评价）
+ * @brief Radar / spider chart (multi-metric evaluation)
  *
- * @param values      一维或二维数组
- *                    - **一维**（N）：一个多边形，N 个轴
- *                    - **二维**（M×N）：M 个多边形，每个 N 个轴（每行一组）
- * @param st          样式与标注
- * @param axis_labels 各轴名称，长度应为 N；空或长度不符时用 `A1`/`A2`… 代替
- * @return BGR 图像
+ * @param values      1-D or 2-D array
+ *                    - **1-D** (N): one polygon with N axes
+ *                    - **2-D** (M x N): M polygons of N axes (one per row)
+ * @param st          Style and annotations
+ * @param axis_labels Axis names, expected length N; empty or mismatched entries
+ *                    fall back to `A1`/`A2`...
+ * @return BGR image
  *
  * @details
- * - 轴从正上方（12 点方向）开始，**顺时针**均匀分布。
- * - 每轴归一化：默认以该轴在所有序列中的最大值为满量程（`radar_axis_max <= 0`）；
- *   若希望所有轴共用同一量程（指标同量纲时），给 `st.radar_axis_max` 赋值。
- * - 网格环数由 `st.radar_rings` 控制；填充透明度 `st.radar_fill_alpha`。
- * - 轴标签画在多边形外侧，按象限自动选择对齐方向，避免压住图形。
+ * - Axes start at 12 o'clock and are distributed **clockwise**.
+ * - Per-axis normalization: by default each axis uses its own maximum across all
+ *   series (`radar_axis_max <= 0`); set `st.radar_axis_max` for a common scale.
+ * - Grid ring count comes from `st.radar_rings`; fill alpha from `st.radar_fill_alpha`.
+ * - Axis labels are drawn outside the polygon, with alignment chosen per quadrant so
+ *   they never overlap the chart.
  *
- * @note 雷达半径按 `min(width, height)` 计算以保持正圆，雷达居中；
- *       输出尺寸仍是 `st.width × st.height`。
- * @note 轴数少于 3 时返回空白图（无法构成多边形）。
+ * @note The radius is derived from `min(width, height)` to keep a true circle and the
+ *       chart is centered; the output size is still `st.width x st.height`.
+ * @note Fewer than 3 axes returns a blank image (no polygon possible).
  *
- * @par 示例
+ * @par Example
  * @code
  * std::vector<std::vector<double>> v = {
- *     {0.92, 0.85, 0.78, 0.95, 0.70},   // 方案 A
- *     {0.75, 0.80, 0.88, 0.70, 0.85}    // 方案 B
+ *     {0.92, 0.85, 0.78, 0.95, 0.70},   // method A
+ *     {0.75, 0.80, 0.88, 0.70, 0.85}    // method B
  * };
  * Style st;
  * st.title  = "Performance";
@@ -506,29 +525,31 @@ cv::Mat PlotRadar(const cv::Mat &values, const Style &st = Style(),
                   const std::vector<std::string> &axis_labels = {});
 
 /* ========================================================================== */
-/*                                 伪彩色图                                    */
+/*                              Pseudo-color map                              */
 /* ========================================================================== */
 
 /**
- * @brief 伪彩色图（热力图）+ 可选色条
+ * @brief Pseudo-color (heat) map with an optional colorbar
  *
- * @param data      二维数组（M×N），例如二维场分布、误差矩阵、代价函数
- * @param st        样式与标注
- * @param colormap  颜色映射，建议 `cv::COLORMAP_JET` / `COLORMAP_TURBO` /
- *                  `COLORMAP_VIRIDIS` / `COLORMAP_HOT` / `COLORMAP_BONE`
- * @param colorbar  是否在右侧画色条（含数值刻度）
- * @return BGR 图像
+ * @param data     2-D array (M x N), e.g. a 2-D field, error matrix or cost function
+ * @param st       Style and annotations
+ * @param colormap Color map, e.g. `cv::COLORMAP_JET` / `COLORMAP_TURBO` /
+ *                 `COLORMAP_VIRIDIS` / `COLORMAP_HOT` / `COLORMAP_BONE`
+ * @param colorbar Whether to draw a colorbar (with numeric ticks) on the right
+ * @return BGR image
  *
  * @details
- * - 数据先按最小/最大值线性归一化到 0..255，再套 `cv::applyColorMap`。
- * - **NaN 会被画成白色**（便于区分"无数据"和"最小值"），不影响归一化范围。
- * - 色条刻度用与数据相同的 `%.4g` / `st.decimals` 格式，保证和正文一致。
- * - 行索引 0 在**图像顶部**（与矩阵书写顺序一致）。
- * - `st.heatmap_grid = true` 时在格子边界画细线（行列数 <= 40 才画）。
- * - 需要固定色标量程时，置 `st.auto_y = false` 并给 `st.y_min` / `st.y_max`
- *   赋值（它们在这里被当作 vmin/vmax）。
+ * - Data is normalized linearly to 0..255 by its min/max, then passed to
+ *   `cv::applyColorMap`.
+ * - **NaN is painted white** (distinguishes "no data" from the minimum) and does not
+ *   affect the normalization range.
+ * - Colorbar ticks use the same `%.4g` / `st.decimals` format as the data.
+ * - Row index 0 is at the **top** of the image (matching matrix order).
+ * - `st.heatmap_grid = true` draws thin cell borders (only when rows and cols <= 40).
+ * - For a fixed color scale, set `st.auto_y = false` and assign `st.y_min` /
+ *   `st.y_max` (used here as vmin/vmax).
  *
- * @par 示例
+ * @par Example
  * @code
  * cv::Mat field(64, 64, CV_64F);
  * Style st;
@@ -541,24 +562,25 @@ cv::Mat PlotPseudoColor(const cv::Mat &data, const Style &st = Style(),
                         int colormap = cv::COLORMAP_JET, bool colorbar = true);
 
 /* ========================================================================== */
-/*                                多子图拼接                                   */
+/*                              Subplot tiling                                */
 /* ========================================================================== */
 
 /**
- * @brief 把多张图拼成 (a)(b)(c) 形式的子图网格
+ * @brief Tile several figures into an (a)(b)(c) subplot grid
  *
- * @param figs   各子图（尺寸可以不同，会被等比缩放到格子里并居中）
- * @param cols   每行列数（<= 0 时自动取 `ceil(sqrt(n))`）
- * @param pad    格子间距（像素）
- * @param labels 子图编号，例如 `{"(a)", "(b)", "(c)"}`；空则不标
- * @param bg     拼图背景色
- * @return 拼接后的图像
+ * @param figs   Subfigures (sizes may differ; each is scaled proportionally and centered)
+ * @param cols   Columns per row (<= 0 picks `ceil(sqrt(n))` automatically)
+ * @param pad    Spacing between cells (pixels)
+ * @param labels Subfigure tags such as `{"(a)", "(b)", "(c)"}`; empty = none
+ * @param bg     Background color of the tiled image
+ * @return Tiled image
  *
- * @details 论文里常见"一张图里 2×2 子图"的需求。本函数等分格子、等比缩放
- *          每张子图并居中，可选在左上角标注 `(a)`。
+ * @details Papers often need a 2x2 subplot figure. This function splits the canvas
+ *          into equal cells, scales each subfigure into its cell, centers it, and
+ *          optionally tags it `(a)` in the top-left corner.
  *
- * @note 每个子图的**宽高比会被保持**（不拉伸）。
- * @note 编号文字用 `cv::putText` + `LINE_AA` 绘制，仅支持 ASCII。
+ * @note The **aspect ratio of each subfigure is preserved** (no stretching).
+ * @note Tags are drawn with `cv::putText` + `LINE_AA`, so ASCII only.
  */
 cv::Mat TileFigures(const std::vector<cv::Mat> &figs,
                     int cols = 0,
@@ -567,17 +589,21 @@ cv::Mat TileFigures(const std::vector<cv::Mat> &figs,
                     cv::Scalar bg = cv::Scalar(255, 255, 255));
 
 /* ========================================================================== */
-/*                                  保存图片                                   */
+/*                               Saving figures                               */
 /* ========================================================================== */
 
 /**
- * @brief 把图像写盘
- * @param img  要保存的图像（BGR）
- * @param path 文件名，扩展名决定格式（`.png` / `.jpg` / `.bmp` / `.tif` / `.pdf` 等）
- * @return true 成功；false 失败（`img` 为空、目录不存在、格式不支持等）
+ * @brief Write an image to disk
+ * @param img  Image to save (BGR)
+ * @param path File name; the extension selects the format (`.png` / `.jpg` / `.bmp` /
+ *             `.tif` / `.pdf` ...)
+ * @return true on success; false on failure (empty `img`, missing directory,
+ *         unsupported format ...)
  *
- * @note **论文插图建议用 PNG**：无损、体积可控，避免 JPEG 在曲线边缘产生振铃。
- * @note 本函数需要 `opencv_imgcodecs` 模块。若某个目标只画图不写盘，可以不链接它。
+ * @note **Prefer PNG for paper figures**: lossless and compact, avoiding the ringing
+ *       JPEG produces around curve edges.
+ * @note This function requires the `opencv_imgcodecs` module. Targets that only draw
+ *       figures and never write them need not link it.
  */
 bool Save(const cv::Mat &img, const std::string &path);
 

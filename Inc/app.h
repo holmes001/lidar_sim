@@ -1,10 +1,10 @@
 /**
  * @file    app.h
- * @brief   通用小工具：FFT、取样、坐标轴、存图
+ * @brief   Generic helpers: FFT, sampling, axes, figure saving
  *
- * @note 这里只放与物理模型无关的通用函数：
- *       雷达方程/波形/回波在 transport.h，匹配滤波在 filter.h，
- *       多普勒处理在 doppler.h，功率与闭环在 power.h。
+ * @note Only model-agnostic helpers live here: radar equation / waveforms / echoes
+ *       in transport.h, matched filtering in filter.h, Doppler processing in
+ *       doppler.h, power and closed loop in power.h.
  */
 #ifndef _APP_H_
 #define _APP_H_
@@ -18,30 +18,30 @@
 
 namespace pl = lidar::plot;
 
-/* ---- 复数变换 ---- */
+/* ---- Complex transforms ---- */
 
-/** @brief 复数 DFT（长度任意，不归一化） */
+/** @brief Complex DFT (any length, not normalized) */
 ComplexVec fft(const ComplexVec& x);
 
-/** @brief 复数 IDFT（含 1/N 归一化） */
+/** @brief Complex IDFT (with 1/N normalization) */
 ComplexVec ifft(const ComplexVec& x);
 
-/** @brief 频谱搬移：把零频从索引 0 移到中心 */
+/** @brief Spectrum shift: move zero frequency from index 0 to the center */
 ComplexVec fftShift(const ComplexVec& x);
 
-/* ---- 取样 ---- */
+/* ---- Sampling ---- */
 
 std::vector<double> vector_real(const ComplexVec &u);
 std::vector<double> vector_abs(const ComplexVec &u);
 
-/* ---- 坐标轴与窗 ---- */
+/* ---- Axes and windows ---- */
 
 std::vector<double> time_axis(std::size_t n, double dt);
 void crop_window(const std::vector<double> &t_us, const std::vector<double> &y,
                  double t0, double t1,
                  std::vector<double> &t_out, std::vector<double> &y_out);
 
-/* ---- 存图 ---- */
+/* ---- Figure output ---- */
 
 bool save_figure(const cv::Mat &fig, const std::string &file_path);
 bool save_picture(const cv::Mat &a, const pl::Style &st, const std::string &file_path);
